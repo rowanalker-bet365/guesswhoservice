@@ -1,0 +1,33 @@
+# .gitlab-ci.yml for the guesswhoservice service
+
+stages:
+  - deploy
+
+# This job builds the Docker image, pushes it to Artifact Registry,
+# and deploys it to Cloud Run.
+# It only runs on merges to the main branch.
+deploy:
+  stage: deploy
+  image: google/cloud-sdk:latest
+  script:
+    # Authenticate with Google Cloud using Workload Identity Federation.
+    - gcloud iam workload-identity-pools create-cred-config "${WORKLOAD_IDENTITY_PROVIDER}" --service-account="${SERVICE_ACCOUNT_EMAIL}" --output-file=.gcp_cred_config.json --credential-source-file=$CI_JOB_JWT_FILE
+    - gcloud auth login --cred-file=.gcp_cred_config.json
+    - gcloud config set project ${GCP_PROJECT_ID}
+
+    # Enable the Artifact Registry API
+    - gcloud services enable artifactregistry.googleapis.com
+
+    # Configure Docker to use the gcloud credential helper.
+    - gcloud auth configure-docker ${GCP_REGION}-docker.pkg.dev
+
+    # Build the Docker image.
+    - docker build -t ${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/guesswho/guesswhoservice:$CI_COMMIT_SHA .
+
+    # Push the Docker image to Artifact Registry.
+    - docker push ${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/guesswho/guesswhoservice:$CI_COMMIT_SHA
+
+    # Deploy the new image to Cloud Run.
+    - gcloud run deploy guesswhoservice --image ${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/guesswho/guesswhoservice:$CI_COMMIT_SHA --region ${GCP_REGION} --platform managed --allow-unauthenticated
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
