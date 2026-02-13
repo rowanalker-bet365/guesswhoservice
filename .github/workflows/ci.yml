@@ -40,6 +40,7 @@ jobs:
         env:
           IMAGE_URL: ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/guesswho/guesswhoservice:${{ github.sha }}
         run: |
+          cd guesswhoservice
           docker build -t $IMAGE_URL .
           docker push $IMAGE_URL
 
