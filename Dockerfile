@@ -1,18 +1,24 @@
 # Dockerfile for the guesswhoservice service
 
-# ---- Builder Stage ----
-FROM golang:1.24.4-alpine AS builder
+# ---- Build Stage ----
+# Use the official Go image as a build environment.
+FROM golang:1.24.4-alpine as builder
 
-# Set the working directory for the entire build operation
+# Set the working directory inside the container.
 WORKDIR /app
 
-# Copy the entire repository content (the build context) into the container
+# Copy the Go module files and download dependencies.
+# This is done in a separate step to leverage Docker layer caching.
+COPY guesswhoservice/go.mod guesswhoservice/go.sum ./
+RUN go mod download
+
+# Copy the rest of the application source code.
 COPY . .
 
-# Change to the service's directory and then run the build.
-# This allows Go to correctly resolve the `replace` directive in go.mod
-# (e.g., `../pkg`) relative to the monorepo structure inside the container.
-RUN cd guesswhoservice && go mod tidy && CGO_ENABLED=0 go build -o /app/server ./cmd/server
+# Build the Go application.
+# CGO_ENABLED=0 is used to build a statically linked binary.
+# -o /app/server builds the output binary to /app/server.
+RUN cd guesswhoservice && CGO_ENABLED=0 go build -o /app/server ./cmd/server
 
 # ---- Production Stage ----
 # Use a minimal base image for the final container.
