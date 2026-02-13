@@ -28,11 +28,9 @@ jobs:
         run: gcloud auth configure-docker ${{ secrets.GCP_REGION }}-docker.pkg.dev
 
       - name: Build and Push Docker Image
-        env:
-          IMAGE_URL: ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/guesswho/guesswhoservice:${{ github.sha }}
         run: |
-          docker build -t $IMAGE_URL .
-          docker push $IMAGE_URL
+          docker build -t ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/guesswho/guesswhoservice:${{ github.sha }} .
+          docker push ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/guesswho/guesswhoservice:${{ github.sha }}
 
       - name: Deploy to Cloud Run
         run: |
