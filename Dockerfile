@@ -9,7 +9,7 @@ WORKDIR /app
 
 # Copy the Go module files and download dependencies.
 # This is done in a separate step to leverage Docker layer caching.
-COPY guesswhoservice/go.mod guesswhoservice/go.sum ./
+COPY go.mod go.sum ./
 RUN go mod download
 
 # Copy the rest of the application source code.
@@ -18,7 +18,8 @@ COPY . .
 # Build the Go application.
 # CGO_ENABLED=0 is used to build a statically linked binary.
 # -o /app/server builds the output binary to /app/server.
-RUN cd guesswhoservice && CGO_ENABLED=0 go build -o /app/server ./cmd/server
+# RUN cd guesswhoservice && CGO_ENABLED=0 go build -o /app/server ./cmd/server
+RUN CGO_ENABLED=0 go build -o /app/server .
 
 # ---- Production Stage ----
 # Use a minimal base image for the final container.
