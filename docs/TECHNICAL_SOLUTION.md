@@ -143,64 +143,200 @@ http://localhost:8080
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/sessions` | Create new game session |
-| GET | `/sessions/{id}` | Get session info |
-| GET | `/sessions/{id}/board` | Get game board |
-| POST | `/sessions/{id}/guess` | Make a guess |
-| POST | `/sessions/{id}/reveal` | Reveal answer |
-| DELETE | `/sessions/{id}` | Delete session |
-| POST | `/chaos/inject` | Inject chaos (testing) |
+| POST | `/v1/sessions/start` | Start a new session (requires X-Team-Id header) |
+| GET | `/v1/sessions/{sessionId}/board` | Get candidate board and trait definitions |
+| GET | `/v1/sessions/{sessionId}/questions` | List available trait questions |
+| POST | `/v1/sessions/{sessionId}/ask` | Ask a trait question about the hidden target |
+| POST | `/v1/sessions/{sessionId}/decode` | Decode an encrypted trait answer |
+| POST | `/v1/sessions/{sessionId}/guess` | Submit a guess for the target candidate |
+| POST | `/v1/sessions/{sessionId}/reveal` | Reveal the hidden target (if enabled) |
+| GET | `/v1/sessions/{sessionId}/status` | Get session status |
+| GET | `/v1/leaderboard` | Get leaderboard |
+| GET | `/health` | Health check |
 
 ### Detailed Endpoint Specifications
 
-#### 1. Create Session
+#### 1. Start Session
 ```http
-POST /sessions
+POST /v1/sessions/start
 Content-Type: application/json
-
-{"grid_size": 24}
+X-Team-Id: TEAM123
 ```
-**Response:** `{"session_id": "abc123", "created_at": "...", "expires_at": "..."}`
+Request Body:
+```json
+{"boardSize": 24, "difficulty": "normal"}
+```
+Response:
+```json
+{
+  "sessionId": "s_abcd1234",
+  "boardSize": 24,
+  "traitsAvailable": 42,
+  "guessLimit": 1,
+  "chaosProfile": {
+    "mode": "scheduled",
+    "windowSeconds": 30,
+    "intervalSeconds": 10
+  }
+}
+```
 
-#### 2. Get Session Info
+#### 2. Session Status
 ```http
-GET /sessions/{id}
+GET /v1/sessions/{sessionId}/status
 ```
-**Response:** `{"session_id": "abc123", "grid_size": 24, "guesses_made": 3}`
+Response:
+```json
+{
+  "sessionId": "s_abcd1234",
+  "active": true,
+  "questionsAsked": 3,
+  "guessesRemaining": 1,
+  "startTime": "2026-01-23T12:34:56Z",
+  "elapsedSeconds": 123
+}
+```
 
 #### 3. Get Game Board
 ```http
-GET /sessions/{id}/board
+GET /v1/sessions/{sessionId}/board
 ```
-**Response:** `{"encrypted_board": "base64...", "grid_size": 24}`
+Response:
+```json
+{
+  "sessionId": "s_abcd1234",
+  "candidates": [
+    {
+      "candidateId": "c_001",
+      "displayName": "Candidate 001",
+      "traits": { "hair_color": "brown", "wears_glasses": false }
+    }
+  ],
+  "traitDefinitions": [
+    { "traitKey": "hair_color", "type": "enum", "values": ["brown","blonde","black","red"] },
+    { "traitKey": "wears_glasses", "type": "boolean" }
+  ]
+}
+```
 
-#### 4. Make Guess
+#### 4. Submit Guess
 ```http
-POST /sessions/{id}/guess
+POST /v1/sessions/{sessionId}/guess
 Content-Type: application/json
 
-{"character_index": 5}
+{"candidateId": "c_017"}
 ```
-**Response:** `{"correct": true, "message": "Congratulations!", "guesses_made": 4}`
+Success Response:
+```json
+{
+  "correct": true,
+  "target": "c_017",
+  "questionsAsked": 5,
+  "timeElapsed": 42.3,
+  "score": 870
+}
+```
+Failure Response:
+```json
+{
+  "correct": false,
+  "target": "c_017",
+  "penalty": -500,
+  "sessionEnded": true
+}
+```
 
 #### 5. Reveal Answer
 ```http
-POST /sessions/{id}/reveal
+POST /v1/sessions/{sessionId}/reveal
 ```
-**Response:** `{"correct_index": 12, "character_name": "Alice"}`
-
-#### 6. Delete Session
-```http
-DELETE /sessions/{id}
+Response:
+```json
+{
+  "target": "c_017",
+  "displayName": "Candidate 017",
+  "traits": {
+    "hair_color": "brown",
+    "eye_color": "blue",
+    "wears_glasses": false
+  }
+}
 ```
-**Response:** 204 No Content
+Notes:
+- Intended for end-of-game reveal or administrative flows.
+- If enabled, revealing may mark the session as completed.
 
-#### 7. Chaos Injection
+#### 6. Health
 ```http
-POST /chaos/inject
+GET /health
+```
+Response:
+```json
+{"status":"healthy"}
+```
+
+#### 7. Chaos
+Chaos mode is internally configurable and used to degrade responses under controlled schedules. No public endpoint is exposed. Use configuration flags (`chaosEnabled`, `chaosIntervalSeconds`, `chaosWindowSeconds`) to enable scheduled chaos.
+
+#### 8. List Trait Questions
+```http
+GET /v1/sessions/{sessionId}/questions
+```
+**Response:**
+```json
+{
+  "questions": [
+    {
+      "questionId": "T01",
+      "traitKey": "hair_color",
+      "type": "enum",
+      "cost": 1,
+      "tier": "basic"
+    },
+    {
+      "questionId": "T29",
+      "traitKey": "phone_os",
+      "type": "enum",
+      "cost": 2,
+      "tier": "encrypted"
+    }
+  ]
+}
+```
+
+#### 9. Ask Trait Question
+```http
+POST /v1/sessions/{sessionId}/ask
 Content-Type: application/json
 
-{"failure_type": "timeout", "duration_seconds": 30}
+{"questionId": "T01"}
+```
+Response (plaintext trait):
+```json
+{"questionId":"T01","traitKey":"hair_color","answer":"brown"}
+```
+Response (encrypted trait):
+```json
+{"questionId":"T29","traitKey":"phone_os","encrypted":"BASE64_GCM_CIPHERTEXT"}
+```
+
+Design Note:
+A RESTful GET variant using a path parameter can also be supported:
+```http
+GET /v1/sessions/{sessionId}/questions/{questionId}
+```
+This would return the same JSON payload as the POST endpoint above. Implementing this requires changes in [SessionHandler.AskQuestion()](internal/handler/session_handler.go:111) and route wiring in [main.go](cmd/server/main.go:111). Backward compatibility can be maintained by supporting both endpoints.
+
+#### 10. Decode Encrypted Answer
+```http
+POST /v1/sessions/{sessionId}/decode
+Content-Type: application/json
+
+{"encrypted":"BASE64_GCM_CIPHERTEXT"}
+```
+**Response:**
+```json
+{"decrypted":"Android"}
 ```
 
 ---
