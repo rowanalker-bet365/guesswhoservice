@@ -8,7 +8,7 @@ permissions:
   contents: 'read'
   id-token: 'write'
 jobs:
-  test:
+  deploy:
     runs-on: self-hosted
     if: github.event.pull_request.merged == true
     steps:
