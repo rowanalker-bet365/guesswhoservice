@@ -18,7 +18,7 @@ COPY . .
 # Build the Go application.
 # CGO_ENABLED=0 is used to build a statically linked binary.
 # -o /app/server builds the output binary to /app/server.
-RUN CGO_ENABLED=0 go build -o /app/server guesswhoserviceapi.go
+RUN CGO_ENABLED=0 go build -o /app/server .
 
 # Set execute permission on the binary.
 RUN chmod +x /app/server
