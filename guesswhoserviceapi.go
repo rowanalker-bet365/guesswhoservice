@@ -1,16 +1,18 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"time"
 
+	"github.com/go-redis/redis/v8"
+	"github.com/guesswho/config"
 	"github.com/guesswho/internal/handler"
 	custommiddleware "github.com/guesswho/internal/middleware"
 	"github.com/guesswho/internal/repository"
 	"github.com/guesswho/internal/service"
-	"github.com/guesswho/pkg/config"
 )
 
 type Middleware func(http.Handler) http.Handler
@@ -66,9 +68,24 @@ func main() {
 	// Load configuration
 	cfg := config.Load()
 
+	// Initialize Redis client
+	redisClient := redis.NewClient(&redis.Options{
+		Addr:     cfg.RedisAddr,
+		Password: cfg.RedisPassword,
+		DB:       0, // use default DB
+	})
+
+	// Ping Redis to check the connection
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := redisClient.Ping(ctx).Result(); err != nil {
+		log.Fatalf("Failed to connect to Redis: %v", err)
+	}
+	log.Println("✅ Successfully connected to Redis")
+
 	// Initialize repositories
-	sessionRepo := repository.NewInMemorySessionRepository()
-	leaderboardRepo := repository.NewInMemoryLeaderboardRepository()
+	sessionRepo := repository.NewRedisSessionRepository(redisClient)
+	leaderboardRepo := repository.NewRedisLeaderboardRepository(redisClient)
 
 	// Initialize services
 	traitCatalog := service.NewTraitCatalogService()
