@@ -2,11 +2,9 @@ package repository
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
-	"time"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/guesswho/internal/domain"
