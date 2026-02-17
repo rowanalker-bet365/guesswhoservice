@@ -2,13 +2,15 @@ name: Deploy to Cloud Run
 
 on:
   pull_request:
-    types: [closed]
+    branches:
+      - main
 
 permissions:
   contents: 'read'
   id-token: 'write'
 jobs:
   deploy:
+    environment: production
     runs-on: self-hosted
     if: github.event.pull_request.merged == true
     steps:
