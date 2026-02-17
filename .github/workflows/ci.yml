@@ -12,7 +12,6 @@ jobs:
   deploy:
     environment: production
     runs-on: self-hosted
-    if: github.event.pull_request.merged == true
     steps:
       - name: Checkout
         uses: actions/checkout@v3
