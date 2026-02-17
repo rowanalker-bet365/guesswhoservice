@@ -25,7 +25,6 @@ func Load() *Config {
 		ChaosIntervalSeconds: getEnvInt("CHAOS_INTERVAL_SECONDS", 240),
 		ChaosWindowSeconds:   getEnvInt("CHAOS_WINDOW_SECONDS", 90),
 		RedisAddr:            getEnv("REDIS_ADDR", "localhost:6379"),
-		RedisPassword:        getEnv("REDIS_PASSWORD", ""),
 	}
 }
 
