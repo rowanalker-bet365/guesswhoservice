@@ -61,13 +61,13 @@ The service follows clean architecture principles with dependency injection:
 go mod download
 
 # Run the service
-go run cmd/server/main.go
+go run guesswhoserviceapi.go
 
 # Run tests
 go test ./...
 
 # Run with custom configuration
-PORT=8080 go run cmd/server/main.go
+PORT=8080 go run guesswhoserviceapi.go
 ```
 
 ## Configuration
