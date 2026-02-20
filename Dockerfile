@@ -2,7 +2,7 @@
 
 # ---- Build Stage ----
 # Use the official Go image as a build environment.
-FROM golang:1.24.4-alpine as builder
+FROM golang:1.26.0-alpine as builder
 
 # Set the working directory inside the container.
 WORKDIR /app
@@ -19,9 +19,6 @@ COPY . .
 # CGO_ENABLED=0 is used to build a statically linked binary.
 # -o /app/server builds the output binary to /app/server.
 RUN CGO_ENABLED=0 go build -o /app/server .
-
-# Set execute permission on the binary.
-RUN chmod +x /app/server
 
 # ---- Production Stage ----
 # Use a minimal base image for the final container.
