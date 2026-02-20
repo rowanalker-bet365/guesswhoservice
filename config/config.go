@@ -14,6 +14,8 @@ type Config struct {
 	ChaosWindowSeconds   int
 	RedisAddr            string
 	RedisPassword        string
+	ServiceURL           string
+	JWTSecret            string
 }
 
 // Load loads configuration from environment variables
@@ -25,6 +27,8 @@ func Load() *Config {
 		ChaosIntervalSeconds: getEnvInt("CHAOS_INTERVAL_SECONDS", 240),
 		ChaosWindowSeconds:   getEnvInt("CHAOS_WINDOW_SECONDS", 90),
 		RedisAddr:            getEnv("REDIS_ADDR", "localhost:6379"),
+		ServiceURL:           getEnv("GUESSWHOSERVICE_URL", ""),
+		JWTSecret:            getEnv("JWT_SECRET", "a-very-secret-key"),
 	}
 }
 

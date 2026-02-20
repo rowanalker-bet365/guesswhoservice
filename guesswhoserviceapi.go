@@ -49,7 +49,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Team-Id, X-Api-Key")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Team-Id, X-Api-Key, Authorization")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -112,26 +112,40 @@ func main() {
 	// Initialize handlers
 	sessionHandler := handler.NewSessionHandler(sessionService, traitCatalog)
 	traitHandler := handler.NewTraitHandler(traitCatalog, encryptionService)
-	leaderboardHandler := handler.NewLeaderboardHandler(leaderboardRepo)
+	clientHandler := handler.NewClientHandler(sessionService, leaderboardRepo, traitCatalog, encryptionService, cfg.JWTSecret)
 
 	// Initialize middleware
 	rateLimiter := custommiddleware.NewRateLimiter(cfg.RateLimitEnabled)
+	jwtAuthMiddleware := custommiddleware.JWTAuth(cfg.JWTSecret)
 
 	// Setup mux with Go 1.22+ patterns
 	mux := http.NewServeMux()
+	
+	// --- Router Setup ---
+	// Main router for public endpoints
+	publicMux := mux
 
-	// API routes
-	mux.Handle("POST /v1/sessions/start", rateLimiter.Limit(10, 1)(http.HandlerFunc(sessionHandler.StartSession)))
-	mux.HandleFunc("GET /v1/sessions/{sessionId}/board", sessionHandler.GetBoard)
-	mux.HandleFunc("GET /v1/sessions/{sessionId}/questions", traitHandler.GetQuestions)
-	mux.HandleFunc("GET /v1/sessions/{sessionId}/status", sessionHandler.Status)
-	mux.Handle("POST /v1/sessions/{sessionId}/ask", rateLimiter.Limit(60, 5)(http.HandlerFunc(sessionHandler.AskQuestion)))
-	mux.HandleFunc("POST /v1/sessions/{sessionId}/decode", traitHandler.Decode)
-	mux.HandleFunc("POST /v1/sessions/{sessionId}/guess", sessionHandler.SubmitGuess)
-	mux.HandleFunc("POST /v1/sessions/{sessionId}/reveal", sessionHandler.Reveal)
+	// Router for client-facing authenticated endpoints (JWT)
+	clientMux := http.NewServeMux()
+	clientMux.HandleFunc("GET /v1/team/progress", clientHandler.GetTeamProgressHandler)
+	clientMux.HandleFunc("GET /v1/sessions/{sessionId}/board", clientHandler.GetBoardHandler)
+	clientMux.HandleFunc("GET /v1/leaderboard", clientHandler.GetLeaderboardHandler)
 
-	// Leaderboard route
-	mux.HandleFunc("GET /v1/leaderboard", leaderboardHandler.GetLeaderboard)
+	// --- Route Registration ---
+	// Mount the authenticated routers with their respective middleware
+	publicMux.Handle("/client/", http.StripPrefix("/client", jwtAuthMiddleware(clientMux)))
+
+	// Public API routes
+	publicMux.HandleFunc("POST /v1/auth/signup", clientHandler.SignupHandler)
+	publicMux.HandleFunc("POST /v1/auth/login", clientHandler.LoginHandler)
+	publicMux.Handle("POST /v1/sessions/start", rateLimiter.Limit(10, 1)(http.HandlerFunc(sessionHandler.StartSession)))
+	publicMux.HandleFunc("GET /v1/sessions/{sessionId}/questions", traitHandler.GetQuestions)
+	publicMux.HandleFunc("GET /v1/sessions/{sessionId}/status", sessionHandler.Status)
+	publicMux.Handle("POST /v1/sessions/{sessionId}/ask", rateLimiter.Limit(60, 5)(http.HandlerFunc(sessionHandler.AskQuestion)))
+	publicMux.HandleFunc("POST /v1/sessions/{sessionId}/decode", traitHandler.Decode)
+	publicMux.HandleFunc("POST /v1/sessions/{sessionId}/guess", sessionHandler.SubmitGuess)
+	publicMux.HandleFunc("POST /v1/sessions/{sessionId}/reveal", sessionHandler.Reveal)
+
 
 	// Health check endpoint
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
