@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -186,8 +186,12 @@ func main() {
 	)
 
 	// Start server
-	addr := fmt.Sprintf(":%s", cfg.Port)
-	log.Printf("🚀 Starting Guess Who API server on %s", addr)
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080" // A default for local running
+	}
+
+	log.Printf("🚀 Starting Guess Who API server, listening on port %s", port)
 	log.Printf("⚙️  Configuration:")
 	log.Printf("   - Rate Limiting: %v", cfg.RateLimitEnabled)
 	log.Printf("   - Chaos Mode: %v", cfg.ChaosEnabled)
@@ -195,9 +199,7 @@ func main() {
 		log.Printf("   - Chaos Interval: %ds", cfg.ChaosIntervalSeconds)
 		log.Printf("   - Chaos Window: %ds", cfg.ChaosWindowSeconds)
 	}
-	log.Printf("📖 API documentation available at http://localhost:%s/", cfg.Port)
+	log.Printf("📖 API documentation available at http://localhost:%s/", port)
 
-	if err := http.ListenAndServe(addr, handlerStack); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
-	}
+	log.Fatal(http.ListenAndServe(":"+port, handlerStack))
 }
