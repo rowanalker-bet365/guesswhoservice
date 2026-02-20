@@ -71,7 +71,7 @@ func main() {
 	// Initialize Redis client
 	redisClient := redis.NewClient(&redis.Options{
 		Addr:     cfg.RedisAddr,
-		Password: cfg.RedisPassword,
+		Password: "",
 		DB:       0, // use default DB
 	})
 
@@ -79,7 +79,8 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if _, err := redisClient.Ping(ctx).Result(); err != nil {
-		log.Fatalf("Failed to connect to Redis: %v", err)
+		log.Printf("Failed to connect to Redis at %s. Error: %v", cfg.RedisAddr, err)
+		log.Fatalf("Exiting due to Redis connection failure.")
 	}
 	log.Println("✅ Successfully connected to Redis")
 
