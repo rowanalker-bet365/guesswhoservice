@@ -4,14 +4,16 @@ package domain
 type Candidate struct {
 	CandidateID string                 `json:"candidateId"`
 	DisplayName string                 `json:"displayName"`
+	ImagePath   string                 `json:"imagePath"`
 	Traits      map[string]interface{} `json:"traits"`
 }
 
 // NewCandidate creates a new candidate with the given traits
-func NewCandidate(id string, displayName string, traits map[string]interface{}) *Candidate {
+func NewCandidate(id string, displayName string, imagePath string, traits map[string]interface{}) *Candidate {
 	return &Candidate{
 		CandidateID: id,
 		DisplayName: displayName,
+		ImagePath:   imagePath,
 		Traits:      traits,
 	}
 }

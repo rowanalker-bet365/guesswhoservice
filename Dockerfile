@@ -20,9 +20,6 @@ COPY . .
 # -o /app/server builds the output binary to /app/server.
 RUN CGO_ENABLED=0 go build -o /app/server .
 
-# Set execute permission on the binary.
-RUN chmod +x /app/server
-
 # ---- Production Stage ----
 # Use a minimal base image for the final container.
 # "scratch" is a completely empty image.

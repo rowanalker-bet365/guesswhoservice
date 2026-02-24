@@ -2,16 +2,16 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/guesswho/config"
+	"github.com/guesswho/internal/db"
 	"github.com/guesswho/internal/handler"
 	custommiddleware "github.com/guesswho/internal/middleware"
-	"github.com/guesswho/internal/repository"
 	"github.com/guesswho/internal/service"
 )
 
@@ -49,7 +49,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Team-Id, X-Api-Key")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Team-Id, X-Api-Key, Authorization")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -71,7 +71,7 @@ func main() {
 	// Initialize Redis client
 	redisClient := redis.NewClient(&redis.Options{
 		Addr:     cfg.RedisAddr,
-		Password: cfg.RedisPassword,
+		Password: "",
 		DB:       0, // use default DB
 	})
 
@@ -79,13 +79,13 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if _, err := redisClient.Ping(ctx).Result(); err != nil {
-		log.Fatalf("Failed to connect to Redis: %v", err)
+		log.Printf("Failed to connect to Redis at %s. Error: %v", cfg.RedisAddr, err)
+		log.Fatalf("Exiting due to Redis connection failure.")
 	}
 	log.Println("✅ Successfully connected to Redis")
 
 	// Initialize repositories
-	sessionRepo := repository.NewRedisSessionRepository(redisClient)
-	leaderboardRepo := repository.NewRedisLeaderboardRepository(redisClient)
+	dbStore := db.NewStore(redisClient)
 
 	// Initialize services
 	traitCatalog := service.NewTraitCatalogService()
@@ -95,8 +95,7 @@ func main() {
 	scoringService := service.NewScoringService()
 
 	sessionService := service.NewSessionService(
-		sessionRepo,
-		leaderboardRepo,
+		dbStore,
 		traitCatalog,
 		boardGenerator,
 		encryptionService,
@@ -112,26 +111,43 @@ func main() {
 	// Initialize handlers
 	sessionHandler := handler.NewSessionHandler(sessionService, traitCatalog)
 	traitHandler := handler.NewTraitHandler(traitCatalog, encryptionService)
-	leaderboardHandler := handler.NewLeaderboardHandler(leaderboardRepo)
+	leaderboardHandler := handler.NewLeaderboardHandler(dbStore)
+	clientHandler := handler.NewClientHandler(sessionService, dbStore, traitCatalog, encryptionService, cfg.JWTSecret)
 
 	// Initialize middleware
 	rateLimiter := custommiddleware.NewRateLimiter(cfg.RateLimitEnabled)
+	jwtAuthMiddleware := custommiddleware.JWTAuth(cfg.JWTSecret)
 
 	// Setup mux with Go 1.22+ patterns
 	mux := http.NewServeMux()
+	
+	// --- Router Setup ---
+	// Main router for public endpoints
+	publicMux := mux
 
-	// API routes
-	mux.Handle("POST /v1/sessions/start", rateLimiter.Limit(10, 1)(http.HandlerFunc(sessionHandler.StartSession)))
-	mux.HandleFunc("GET /v1/sessions/{sessionId}/board", sessionHandler.GetBoard)
-	mux.HandleFunc("GET /v1/sessions/{sessionId}/questions", traitHandler.GetQuestions)
-	mux.HandleFunc("GET /v1/sessions/{sessionId}/status", sessionHandler.Status)
-	mux.Handle("POST /v1/sessions/{sessionId}/ask", rateLimiter.Limit(60, 5)(http.HandlerFunc(sessionHandler.AskQuestion)))
-	mux.HandleFunc("POST /v1/sessions/{sessionId}/decode", traitHandler.Decode)
-	mux.HandleFunc("POST /v1/sessions/{sessionId}/guess", sessionHandler.SubmitGuess)
-	mux.HandleFunc("POST /v1/sessions/{sessionId}/reveal", sessionHandler.Reveal)
+	// Router for client-facing authenticated endpoints (JWT)
+	clientMux := http.NewServeMux()
+	clientMux.HandleFunc("GET /v1/team/progress", clientHandler.GetTeamProgressHandler)
+	clientMux.HandleFunc("GET /v1/team/solved", clientHandler.GetTeamSolvedHandler)
+	clientMux.HandleFunc("POST /v1/team/reset", clientHandler.ResetTeamHandler)
+	clientMux.HandleFunc("GET /v1/sessions/{sessionId}/board", clientHandler.GetBoardHandler)
 
-	// Leaderboard route
-	mux.HandleFunc("GET /v1/leaderboard", leaderboardHandler.GetLeaderboard)
+	// --- Route Registration ---
+	// Mount the authenticated routers with their respective middleware
+	publicMux.Handle("/client/", http.StripPrefix("/client", jwtAuthMiddleware(clientMux)))
+
+	// Public API routes
+	publicMux.HandleFunc("POST /v1/auth/signup", clientHandler.SignupHandler)
+	publicMux.HandleFunc("POST /v1/auth/login", clientHandler.LoginHandler)
+	publicMux.Handle("POST /v1/sessions/start", rateLimiter.Limit(10, 1)(http.HandlerFunc(sessionHandler.StartSession)))
+	publicMux.HandleFunc("GET /v1/leaderboard", leaderboardHandler.GetLeaderboard)
+	publicMux.HandleFunc("GET /v1/game/master-board", leaderboardHandler.GetMasterBoardHandler)
+	publicMux.HandleFunc("GET /v1/sessions/{sessionId}/questions", traitHandler.GetQuestions)
+	publicMux.HandleFunc("GET /v1/sessions/{sessionId}/status", sessionHandler.Status)
+	publicMux.Handle("POST /v1/sessions/{sessionId}/ask", rateLimiter.Limit(60, 5)(http.HandlerFunc(sessionHandler.AskQuestion)))
+	publicMux.HandleFunc("POST /v1/sessions/{sessionId}/decode", traitHandler.Decode)
+	publicMux.HandleFunc("POST /v1/sessions/{sessionId}/guess", sessionHandler.SubmitGuess)
+	publicMux.HandleFunc("POST /v1/sessions/{sessionId}/reveal", sessionHandler.Reveal)
 
 	// Health check endpoint
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -141,7 +157,7 @@ func main() {
 	})
 
 	// Root endpoint with API info
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{
@@ -172,8 +188,12 @@ func main() {
 	)
 
 	// Start server
-	addr := fmt.Sprintf(":%s", cfg.Port)
-	log.Printf("🚀 Starting Guess Who API server on %s", addr)
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080" // A default for local running
+	}
+
+	log.Printf("🚀 Starting Guess Who API server, listening on port %s", port)
 	log.Printf("⚙️  Configuration:")
 	log.Printf("   - Rate Limiting: %v", cfg.RateLimitEnabled)
 	log.Printf("   - Chaos Mode: %v", cfg.ChaosEnabled)
@@ -181,9 +201,7 @@ func main() {
 		log.Printf("   - Chaos Interval: %ds", cfg.ChaosIntervalSeconds)
 		log.Printf("   - Chaos Window: %ds", cfg.ChaosWindowSeconds)
 	}
-	log.Printf("📖 API documentation available at http://localhost:%s/", cfg.Port)
+	log.Printf("📖 API documentation available at http://localhost:%s/", port)
 
-	if err := http.ListenAndServe(addr, handlerStack); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
-	}
+	log.Fatal(http.ListenAndServe(":"+port, handlerStack))
 }

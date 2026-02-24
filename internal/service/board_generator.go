@@ -52,7 +52,8 @@ func (s *boardGeneratorService) GenerateBoard(seed int64, boardSize int, traitCa
 
 		candidateID := fmt.Sprintf("c_%03d", i+1)
 		displayName := fmt.Sprintf("Candidate %03d", i+1)
-		candidate := domain.NewCandidate(candidateID, displayName, candidateTraits)
+		imagePath := fmt.Sprintf("/images/characters/%s.png", candidateID)
+		candidate := domain.NewCandidate(candidateID, displayName, imagePath, candidateTraits)
 		candidates = append(candidates, candidate)
 	}
 
