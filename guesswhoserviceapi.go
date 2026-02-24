@@ -9,9 +9,9 @@ import (
 
 	"github.com/go-redis/redis/v8"
 	"github.com/guesswho/config"
+	"github.com/guesswho/internal/db"
 	"github.com/guesswho/internal/handler"
 	custommiddleware "github.com/guesswho/internal/middleware"
-	"github.com/guesswho/internal/repository"
 	"github.com/guesswho/internal/service"
 )
 
@@ -85,8 +85,7 @@ func main() {
 	log.Println("✅ Successfully connected to Redis")
 
 	// Initialize repositories
-	sessionRepo := repository.NewRedisSessionRepository(redisClient)
-	leaderboardRepo := repository.NewRedisLeaderboardRepository(redisClient)
+	dbStore := db.NewStore(redisClient)
 
 	// Initialize services
 	traitCatalog := service.NewTraitCatalogService()
@@ -96,8 +95,7 @@ func main() {
 	scoringService := service.NewScoringService()
 
 	sessionService := service.NewSessionService(
-		sessionRepo,
-		leaderboardRepo,
+		dbStore,
 		traitCatalog,
 		boardGenerator,
 		encryptionService,
@@ -113,7 +111,8 @@ func main() {
 	// Initialize handlers
 	sessionHandler := handler.NewSessionHandler(sessionService, traitCatalog)
 	traitHandler := handler.NewTraitHandler(traitCatalog, encryptionService)
-	clientHandler := handler.NewClientHandler(sessionService, leaderboardRepo, traitCatalog, encryptionService, cfg.JWTSecret)
+	leaderboardHandler := handler.NewLeaderboardHandler(dbStore)
+	clientHandler := handler.NewClientHandler(sessionService, dbStore, traitCatalog, encryptionService, cfg.JWTSecret)
 
 	// Initialize middleware
 	rateLimiter := custommiddleware.NewRateLimiter(cfg.RateLimitEnabled)
@@ -130,7 +129,6 @@ func main() {
 	clientMux := http.NewServeMux()
 	clientMux.HandleFunc("GET /v1/team/progress", clientHandler.GetTeamProgressHandler)
 	clientMux.HandleFunc("GET /v1/sessions/{sessionId}/board", clientHandler.GetBoardHandler)
-	clientMux.HandleFunc("GET /v1/leaderboard", clientHandler.GetLeaderboardHandler)
 
 	// --- Route Registration ---
 	// Mount the authenticated routers with their respective middleware
@@ -140,13 +138,13 @@ func main() {
 	publicMux.HandleFunc("POST /v1/auth/signup", clientHandler.SignupHandler)
 	publicMux.HandleFunc("POST /v1/auth/login", clientHandler.LoginHandler)
 	publicMux.Handle("POST /v1/sessions/start", rateLimiter.Limit(10, 1)(http.HandlerFunc(sessionHandler.StartSession)))
+	publicMux.HandleFunc("GET /v1/leaderboard", leaderboardHandler.GetLeaderboard)
 	publicMux.HandleFunc("GET /v1/sessions/{sessionId}/questions", traitHandler.GetQuestions)
 	publicMux.HandleFunc("GET /v1/sessions/{sessionId}/status", sessionHandler.Status)
 	publicMux.Handle("POST /v1/sessions/{sessionId}/ask", rateLimiter.Limit(60, 5)(http.HandlerFunc(sessionHandler.AskQuestion)))
 	publicMux.HandleFunc("POST /v1/sessions/{sessionId}/decode", traitHandler.Decode)
 	publicMux.HandleFunc("POST /v1/sessions/{sessionId}/guess", sessionHandler.SubmitGuess)
 	publicMux.HandleFunc("POST /v1/sessions/{sessionId}/reveal", sessionHandler.Reveal)
-
 
 	// Health check endpoint
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {

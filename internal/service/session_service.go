@@ -1,13 +1,17 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"hash/fnv"
+	"log"
 	"math/rand"
+	"time"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
+	"github.com/guesswho/internal/db"
 	"github.com/guesswho/internal/domain"
-	"github.com/guesswho/internal/repository"
 )
 
 // SessionService manages game sessions
@@ -20,8 +24,7 @@ type SessionService interface {
 }
 
 type sessionService struct {
-	sessionRepo       repository.SessionRepository
-	leaderboardRepo   repository.LeaderboardRepository
+	dbStore           *db.Store
 	traitCatalog      TraitCatalogService
 	boardGenerator    BoardGeneratorService
 	encryptionService EncryptionService
@@ -41,8 +44,7 @@ type SessionServiceConfig struct {
 
 // NewSessionService creates a new session service
 func NewSessionService(
-	sessionRepo repository.SessionRepository,
-	leaderboardRepo repository.LeaderboardRepository,
+	dbStore *db.Store,
 	traitCatalog TraitCatalogService,
 	boardGenerator BoardGeneratorService,
 	encryptionService EncryptionService,
@@ -51,8 +53,7 @@ func NewSessionService(
 	config SessionServiceConfig,
 ) SessionService {
 	return &sessionService{
-		sessionRepo:       sessionRepo,
-		leaderboardRepo:   leaderboardRepo,
+		dbStore:           dbStore,
 		traitCatalog:      traitCatalog,
 		boardGenerator:    boardGenerator,
 		encryptionService: encryptionService,
@@ -115,7 +116,7 @@ func (s *sessionService) StartSession(teamID string, boardSize int, difficulty s
 	}
 
 	// Save session
-	if err := s.sessionRepo.Save(session); err != nil {
+	if err := s.dbStore.WriteSession(context.Background(), session); err != nil {
 		return nil, fmt.Errorf("failed to save session: %w", err)
 	}
 
@@ -123,11 +124,11 @@ func (s *sessionService) StartSession(teamID string, boardSize int, difficulty s
 }
 
 func (s *sessionService) GetSession(sessionID string) (*domain.Session, error) {
-	return s.sessionRepo.GetByID(sessionID)
+	return s.dbStore.ReadSession(context.Background(), sessionID)
 }
 
 func (s *sessionService) AskQuestion(sessionID string, questionID string) (*domain.TraitAnswer, error) {
-	session, err := s.sessionRepo.GetByID(sessionID)
+	session, err := s.dbStore.ReadSession(context.Background(), sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +146,7 @@ func (s *sessionService) AskQuestion(sessionID string, questionID string) (*doma
 	// Check for chaos/failure injection
 	if s.chaosService.ShouldFail(session, traitDef) {
 		session.IncrementFailure("failed")
-		s.sessionRepo.Save(session)
+		s.dbStore.WriteSession(context.Background(), session)
 
 		return &domain.TraitAnswer{
 			QuestionID: questionID,
@@ -163,7 +164,7 @@ func (s *sessionService) AskQuestion(sessionID string, questionID string) (*doma
 
 	// Record the question
 	session.RecordQuestion(questionID)
-	s.sessionRepo.Save(session)
+	s.dbStore.WriteSession(context.Background(), session)
 
 	// Build response
 	traitAnswer := &domain.TraitAnswer{
@@ -188,7 +189,7 @@ func (s *sessionService) AskQuestion(sessionID string, questionID string) (*doma
 }
 
 func (s *sessionService) SubmitGuess(sessionID string, candidateID string) (*domain.GuessResult, error) {
-	session, err := s.sessionRepo.GetByID(sessionID)
+	session, err := s.dbStore.ReadSession(context.Background(), sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -233,6 +234,7 @@ func (s *sessionService) SubmitGuess(sessionID string, candidateID string) (*dom
 	if correct {
 		session.CorrectGuess = true
 
+
 		// Rotate target to a new random remaining candidate (unguessed) to allow continued play.
 		// Do not rotate if the session is about to end due to exhaustion of the board.
 		if session.GetGuessedCount() < len(session.Candidates) {
@@ -260,7 +262,7 @@ func (s *sessionService) SubmitGuess(sessionID string, candidateID string) (*dom
 	}
 
 	// Persist updates
-	_ = s.sessionRepo.Save(session)
+	_ = s.dbStore.WriteSession(context.Background(), session)
 
 	// Record on leaderboard only when the session actually ends
 	if session.Completed {
@@ -276,13 +278,20 @@ func (s *sessionService) SubmitGuess(sessionID string, candidateID string) (*dom
 			finalScore = -500
 		}
 
-		s.leaderboardRepo.RecordSolve(
-			session.TeamID,
-			session.GetElapsedTime(),
-			session.GetQuestionsAskedCount(),
-			finalScore,
-			finalCorrect,
-		)
+		s.updateTeamStats(session, finalScore, finalCorrect)
+	}
+
+	// Publish an update now that all data is persisted, regardless of guess correctness.
+	if correct {
+		// For a correct guess, include the solved character ID.
+		if err := s.dbStore.PublishGameUpdate(context.Background(), session.TeamID, candidateID); err != nil {
+			log.Printf("Error publishing game update: %v", err)
+		}
+	} else {
+		// For an incorrect guess, send a generic update to trigger a client refetch.
+		if err := s.dbStore.PublishGameUpdate(context.Background(), session.TeamID, ""); err != nil {
+			log.Printf("Error publishing game update: %v", err)
+		}
 	}
 
 	// Build per-guess result
@@ -301,7 +310,7 @@ func (s *sessionService) SubmitGuess(sessionID string, candidateID string) (*dom
 }
 
 func (s *sessionService) Reveal(sessionID string) (*domain.RevealResult, error) {
-	session, err := s.sessionRepo.GetByID(sessionID)
+	session, err := s.dbStore.ReadSession(context.Background(), sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -312,7 +321,7 @@ func (s *sessionService) Reveal(sessionID string) (*domain.RevealResult, error) 
 	// Preserve whether the session had a correct guess previously.
 	if !alreadyCompleted {
 		session.MarkComplete(session.CorrectGuess)
-		_ = s.sessionRepo.Save(session)
+		_ = s.dbStore.WriteSession(context.Background(), session)
 
 		// Record on leaderboard when the session ends via reveal
 		finalCorrect := session.CorrectGuess
@@ -327,13 +336,7 @@ func (s *sessionService) Reveal(sessionID string) (*domain.RevealResult, error) 
 			finalScore = -500
 		}
 
-		s.leaderboardRepo.RecordSolve(
-			session.TeamID,
-			session.GetElapsedTime(),
-			session.GetQuestionsAskedCount(),
-			finalScore,
-			finalCorrect,
-		)
+		s.updateTeamStats(session, finalScore, finalCorrect)
 	}
 
 	res := &domain.RevealResult{
@@ -346,4 +349,30 @@ func (s *sessionService) Reveal(sessionID string) (*domain.RevealResult, error) 
 		SessionEnded: session.Completed,
 	}
 	return res, nil
+}
+
+func (s *sessionService) updateTeamStats(session *domain.Session, score int, correct bool) {
+	ctx := context.Background()
+	teamData, err := s.dbStore.ReadTeamData(ctx, session.TeamID)
+	if err != nil && err != redis.Nil {
+		log.Printf("Error reading team data for %s: %v", session.TeamID, err)
+		return
+	}
+	if err == redis.Nil {
+		// This case should ideally not happen if teams are created before sessions
+		teamData = &db.TeamData{}
+	}
+
+	teamData.Score += score
+	if correct {
+		teamData.Solves++
+		elapsed := time.Duration(session.GetElapsedTime()) * time.Second
+		if teamData.FastestSolve == 0 || elapsed < teamData.FastestSolve {
+			teamData.FastestSolve = elapsed
+		}
+	}
+
+	if err := s.dbStore.WriteTeamData(ctx, session.TeamID, teamData); err != nil {
+		log.Printf("Error writing team data for %s: %v", session.TeamID, err)
+	}
 }

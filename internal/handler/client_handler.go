@@ -9,29 +9,11 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/guesswho/internal/db"
 	"github.com/guesswho/internal/middleware"
-	"github.com/guesswho/internal/repository"
 	"github.com/guesswho/internal/service"
 )
 
-// In-memory store for teams, for now.
-var (
-	teams = make(map[string]*TeamData)
-	mu    sync.RWMutex
-)
-
-// TeamData is the central model for a team's private state.
-type TeamData struct {
-	ID                 string    `json:"id"`
-	TeamName           string    `json:"teamName"`
-	TeamColor          string    `json:"teamColor"`
-	ChallengeStartTime time.Time `json:"challengeStartTime"`
-	TotalSolves        int       `json:"totalSolves"`
-	SolvedCharacters   []string  `json:"solvedCharacters"`
-	FastestSolve       int       `json:"fastestSolve"` // Duration in milliseconds
-	TotalScore         int       `json:"totalScore"`
-	Password           string    `json:"-"` // This will not be exposed in the API
-}
 
 // SignupRequest is the request body for the signup endpoint.
 type SignupRequest struct {
@@ -63,18 +45,18 @@ type LoginResponse struct {
 
 // ClientHandler holds dependencies for the client-facing API handlers.
 type ClientHandler struct {
-	sessionService   service.SessionService
-	leaderboardRepo  repository.LeaderboardRepository
+	sessionService    service.SessionService
+	store             *db.Store
 	traitCatalog      service.TraitCatalogService
 	encryptionService service.EncryptionService
 	jwtSecret         string
 }
 
 // NewClientHandler creates a new ClientHandler.
-func NewClientHandler(sessionService service.SessionService, leaderboardRepo repository.LeaderboardRepository, traitCatalog service.TraitCatalogService, encryptionService service.EncryptionService, jwtSecret string) *ClientHandler {
+func NewClientHandler(sessionService service.SessionService, store *db.Store, traitCatalog service.TraitCatalogService, encryptionService service.EncryptionService, jwtSecret string) *ClientHandler {
 	return &ClientHandler{
 		sessionService:    sessionService,
-		leaderboardRepo:   leaderboardRepo,
+		store:             store,
 		traitCatalog:      traitCatalog,
 		encryptionService: encryptionService,
 		jwtSecret:         jwtSecret,
@@ -89,27 +71,31 @@ func (h *ClientHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mu.RLock()
-	for _, team := range teams {
-		if team.TeamName == req.TeamName {
-			mu.RUnlock()
-			http.Error(w, "Team name already exists", http.StatusConflict)
-			return
-		}
-	}
-	mu.RUnlock()
-
-	newTeam := &TeamData{
-		ID:                 "team-" + uuid.New().String(),
-		TeamName:           req.TeamName,
-		Password:           req.Password, // In a real app, hash this!
-		TeamColor:          fmt.Sprintf("#%06x", uuid.New().ID()%0xFFFFFF),
-		ChallengeStartTime: time.Now(),
+	// Check if team name already exists
+	_, err := h.store.GetTeamIDByName(r.Context(), req.TeamName)
+	if err == nil {
+		http.Error(w, "Team name already exists", http.StatusConflict)
+		return
 	}
 
-	mu.Lock()
-	teams[newTeam.ID] = newTeam
-	mu.Unlock()
+	teamID := "team-" + uuid.New().String()
+	hashedPassword, err := h.encryptionService.HashPassword(req.Password)
+	if err != nil {
+		http.Error(w, "Failed to hash password", http.StatusInternalServerError)
+		return
+	}
+
+	newTeam := &db.TeamData{
+		Name:         req.TeamName,
+		PasswordHash: hashedPassword,
+		RegisteredAt: time.Now(),
+		Color:        fmt.Sprintf("#%06x", uuid.New().ID()%0xFFFFFF),
+	}
+
+	if err := h.store.WriteTeamData(r.Context(), teamID, newTeam); err != nil {
+		http.Error(w, "Failed to save team", http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -124,24 +110,26 @@ func (h *ClientHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var foundTeam *TeamData
-	mu.RLock()
-	for _, team := range teams {
-		if team.TeamName == req.TeamName && team.Password == req.Password {
-			foundTeam = team
-			break
-		}
+	teamID, err := h.store.GetTeamIDByName(r.Context(), req.TeamName)
+	if err != nil {
+		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		return
 	}
-	mu.RUnlock()
 
-	if foundTeam == nil {
+	team, err := h.store.ReadTeamData(r.Context(), teamID)
+	if err != nil {
+		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		return
+	}
+
+	if !h.encryptionService.CheckPasswordHash(req.Password, team.PasswordHash) {
 		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 		return
 	}
 
 	// Create the JWT claims, which includes the team ID and expiry time
 	claims := jwt.MapClaims{
-		"teamId": foundTeam.ID,
+		"teamId": teamID,
 		"exp":    time.Now().Add(time.Hour * 72).Unix(),
 	}
 
@@ -156,7 +144,7 @@ func (h *ClientHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Start a new session for the team
-	session, err := h.sessionService.StartSession(foundTeam.ID, 64, "normal")
+	session, err := h.sessionService.StartSession(teamID, 64, "normal")
 	if err != nil {
 		http.Error(w, "Failed to start session", http.StatusInternalServerError)
 		return
@@ -171,9 +159,9 @@ func (h *ClientHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
 			Name  string `json:"name"`
 			Color string `json:"color"`
 		}{
-			ID:    foundTeam.ID,
-			Name:  foundTeam.TeamName,
-			Color: foundTeam.TeamColor,
+			ID:    teamID,
+			Name:  team.Name,
+			Color: team.Color,
 		},
 		SessionID: session.SessionID,
 	})
@@ -187,29 +175,14 @@ func (h *ClientHandler) GetTeamProgressHandler(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	mu.RLock()
-	team, ok := teams[teamID]
-	mu.RUnlock()
-
-	if !ok {
+	team, err := h.store.ReadTeamData(r.Context(), teamID)
+	if err != nil {
 		http.Error(w, "Team not found", http.StatusNotFound)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(team)
-}
-
-// GetLeaderboardHandler returns the public leaderboard
-func (h *ClientHandler) GetLeaderboardHandler(w http.ResponseWriter, r *http.Request) {
-	entries := h.leaderboardRepo.GetLeaderboard()
-
-	response := map[string]interface{}{
-		"entries": entries,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
 }
 
 // GetBoardHandler returns the game board for a given session
