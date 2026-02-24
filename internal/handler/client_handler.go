@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -41,6 +40,12 @@ type LoginResponse struct {
 		Color string `json:"color"`
 	} `json:"team"`
 	SessionID string `json:"sessionId"`
+}
+
+// TeamSolvedResponse is the response body for the team solved list endpoint.
+type TeamSolvedResponse struct {
+	TeamID             string   `json:"teamId"`
+	SolvedCharacterIds []string `json:"solvedCharacterIds"`
 }
 
 // ClientHandler holds dependencies for the client-facing API handlers.
@@ -185,6 +190,36 @@ func (h *ClientHandler) GetTeamProgressHandler(w http.ResponseWriter, r *http.Re
 	json.NewEncoder(w).Encode(team)
 }
 
+// GetTeamSolvedHandler returns the list of solved characters for the authenticated team
+func (h *ClientHandler) GetTeamSolvedHandler(w http.ResponseWriter, r *http.Request) {
+	teamID, ok := r.Context().Value(middleware.TeamIDKey).(string)
+	if !ok {
+		http.Error(w, "Team ID not found in token", http.StatusUnauthorized)
+		return
+	}
+
+	team, err := h.store.ReadTeamData(r.Context(), teamID)
+	if err != nil {
+		http.Error(w, "Team not found", http.StatusNotFound)
+		return
+	}
+
+	// Ensure SolvedCharacters is not nil for JSON marshaling (empty array instead of null)
+	solved := team.SolvedCharacters
+	if solved == nil {
+		solved = []string{}
+	}
+
+	response := TeamSolvedResponse{
+		TeamID:             teamID,
+		SolvedCharacterIds: solved,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
 // GetBoardHandler returns the game board for a given session
 func (h *ClientHandler) GetBoardHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("sessionId")
@@ -217,4 +252,32 @@ func (h *ClientHandler) GetBoardHandler(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// ResetTeamHandler resets the team's progress (solved characters and active session)
+func (h *ClientHandler) ResetTeamHandler(w http.ResponseWriter, r *http.Request) {
+	teamID, ok := r.Context().Value(middleware.TeamIDKey).(string)
+	if !ok {
+		http.Error(w, "Team ID not found in token", http.StatusUnauthorized)
+		return
+	}
+
+	team, err := h.store.ReadTeamData(r.Context(), teamID)
+	if err != nil {
+		http.Error(w, "Team not found", http.StatusNotFound)
+		return
+	}
+
+	// Reset progress
+	team.SolvedCharacters = []string{}
+	team.ActiveSessionID = ""
+
+	if err := h.store.WriteTeamData(r.Context(), teamID, team); err != nil {
+		http.Error(w, "Failed to reset team progress", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Team progress reset successfully"})
 }

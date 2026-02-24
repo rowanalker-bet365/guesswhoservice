@@ -128,6 +128,8 @@ func main() {
 	// Router for client-facing authenticated endpoints (JWT)
 	clientMux := http.NewServeMux()
 	clientMux.HandleFunc("GET /v1/team/progress", clientHandler.GetTeamProgressHandler)
+	clientMux.HandleFunc("GET /v1/team/solved", clientHandler.GetTeamSolvedHandler)
+	clientMux.HandleFunc("POST /v1/team/reset", clientHandler.ResetTeamHandler)
 	clientMux.HandleFunc("GET /v1/sessions/{sessionId}/board", clientHandler.GetBoardHandler)
 
 	// --- Route Registration ---
@@ -139,6 +141,7 @@ func main() {
 	publicMux.HandleFunc("POST /v1/auth/login", clientHandler.LoginHandler)
 	publicMux.Handle("POST /v1/sessions/start", rateLimiter.Limit(10, 1)(http.HandlerFunc(sessionHandler.StartSession)))
 	publicMux.HandleFunc("GET /v1/leaderboard", leaderboardHandler.GetLeaderboard)
+	publicMux.HandleFunc("GET /v1/game/master-board", leaderboardHandler.GetMasterBoardHandler)
 	publicMux.HandleFunc("GET /v1/sessions/{sessionId}/questions", traitHandler.GetQuestions)
 	publicMux.HandleFunc("GET /v1/sessions/{sessionId}/status", sessionHandler.Status)
 	publicMux.Handle("POST /v1/sessions/{sessionId}/ask", rateLimiter.Limit(60, 5)(http.HandlerFunc(sessionHandler.AskQuestion)))

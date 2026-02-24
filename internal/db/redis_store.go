@@ -22,6 +22,7 @@ type TeamData struct {
 	FastestSolve     time.Duration
 	SolvedCharacters []string
 	Milestones       []string
+	ActiveSessionID  string
 }
 
 // Store handles all Redis data interactions.
@@ -54,6 +55,7 @@ func (s *Store) WriteTeamData(ctx context.Context, teamID string, data *TeamData
 		"solves", data.Solves,
 		"fastest_solve", data.FastestSolve.String(),
 		"milestones", strings.Join(data.Milestones, ","),
+		"active_session_id", data.ActiveSessionID,
 	)
 
 	solvedCharsKey := "team:" + teamID + ":solved_characters"
@@ -116,6 +118,7 @@ func (s *Store) ReadTeamData(ctx context.Context, teamID string) (*TeamData, err
 	if milestonesStr := teamData["milestones"]; milestonesStr != "" {
 		data.Milestones = strings.Split(milestonesStr, ",")
 	}
+	data.ActiveSessionID = teamData["active_session_id"]
 
 	solvedChars, err := solvedCharsCmd.Result()
 	// SMembers doesn't return redis.Nil if the key doesn't exist, but an empty slice.

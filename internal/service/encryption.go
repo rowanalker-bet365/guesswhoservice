@@ -3,6 +3,8 @@ package service
 import (
 	"encoding/base64"
 	"fmt"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // EncryptionService handles encryption and decryption of trait answers
@@ -10,6 +12,8 @@ import (
 type EncryptionService interface {
 	Encrypt(plaintext string) (string, error)
 	Decrypt(encrypted string) (string, error)
+	HashPassword(password string) (string, error)
+	CheckPasswordHash(password, hash string) bool
 }
 
 type encryptionService struct{}
@@ -45,4 +49,14 @@ func (s *encryptionService) Decrypt(encrypted string) (string, error) {
 	}
 
 	return payload, nil
+}
+
+func (s *encryptionService) HashPassword(password string) (string, error) {
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
+	return string(bytes), err
+}
+
+func (s *encryptionService) CheckPasswordHash(password, hash string) bool {
+	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+	return err == nil
 }
