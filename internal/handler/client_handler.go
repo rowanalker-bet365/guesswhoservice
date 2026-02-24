@@ -42,12 +42,6 @@ type LoginResponse struct {
 	} `json:"team"`
 }
 
-// TeamSolvedResponse is the response body for the team solved list endpoint.
-type TeamSolvedResponse struct {
-	TeamID             string   `json:"teamId"`
-	SolvedCharacterIds []string `json:"solvedCharacterIds"`
-}
-
 // MasterBoardCharacterStatus represents the status of a character on the master board
 type MasterBoardCharacterStatus struct {
 	ID            string   `json:"id"`
@@ -190,7 +184,6 @@ func (h *ClientHandler) GetTeamProgressHandler(w http.ResponseWriter, r *http.Re
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(team)
 }
-
 // ResetTeamHandler resets the team's progress (solved characters and active session)
 func (h *ClientHandler) ResetTeamHandler(w http.ResponseWriter, r *http.Request) {
 	teamID, ok := r.Context().Value(middleware.TeamIDKey).(string)

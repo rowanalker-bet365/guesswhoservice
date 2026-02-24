@@ -124,18 +124,22 @@ func main() {
 	// Main router for public endpoints
 	publicMux := mux
 
-	// Router for client-facing authenticated endpoints (JWT)
-	clientMux := http.NewServeMux()
-	clientMux.HandleFunc("POST /auth/signup", clientHandler.SignupHandler)
-	clientMux.HandleFunc("POST /auth/login", clientHandler.LoginHandler)
-	clientMux.HandleFunc("GET /team/progress", clientHandler.GetTeamProgressHandler)
-	clientMux.HandleFunc("POST /team/reset", clientHandler.ResetTeamHandler)
-	clientMux.HandleFunc("GET /game/leaderboard", clientHandler.GetLeaderboard)
-	clientMux.HandleFunc("GET /game/master-board", clientHandler.GetMasterBoardHandler)
+	// --- Client Routes ---
 
-	// --- Route Registration ---
-	// Mount the authenticated routers with their respective middleware
-	publicMux.Handle("/client/", http.StripPrefix("/client", jwtAuthMiddleware(clientMux)))
+	// Public client routes (No JWT required)
+	publicMux.HandleFunc("POST /client/auth/signup", clientHandler.SignupHandler)
+	publicMux.HandleFunc("POST /client/auth/login", clientHandler.LoginHandler)
+	publicMux.HandleFunc("GET /client/game/leaderboard", clientHandler.GetLeaderboard)
+	publicMux.HandleFunc("GET /client/game/master-board", clientHandler.GetMasterBoardHandler)
+
+	// Protected client routes (JWT required)
+	protectedClientMux := http.NewServeMux()
+	protectedClientMux.HandleFunc("GET /team/progress", clientHandler.GetTeamProgressHandler)
+	protectedClientMux.HandleFunc("POST /team/reset", clientHandler.ResetTeamHandler)
+
+	// Mount the authenticated router with middleware
+	// Note: Specific routes like /client/auth/signup defined on 'publicMux' take precedence over this prefix match
+	publicMux.Handle("/client/", http.StripPrefix("/client", jwtAuthMiddleware(protectedClientMux)))
 
 	// Public API routes
 	publicMux.Handle("POST /sessions/start", rateLimiter.Limit(10, 1)(http.HandlerFunc(sessionHandler.StartSession)))
