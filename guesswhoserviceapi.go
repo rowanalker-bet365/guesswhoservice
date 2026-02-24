@@ -111,8 +111,7 @@ func main() {
 	// Initialize handlers
 	sessionHandler := handler.NewSessionHandler(sessionService, traitCatalog)
 	traitHandler := handler.NewTraitHandler(traitCatalog, encryptionService)
-	leaderboardHandler := handler.NewLeaderboardHandler(dbStore)
-	clientHandler := handler.NewClientHandler(sessionService, dbStore, traitCatalog, encryptionService, cfg.JWTSecret)
+	clientHandler := handler.NewClientHandler(dbStore, encryptionService, cfg.JWTSecret)
 
 	// Initialize middleware
 	rateLimiter := custommiddleware.NewRateLimiter(cfg.RateLimitEnabled)
@@ -127,27 +126,26 @@ func main() {
 
 	// Router for client-facing authenticated endpoints (JWT)
 	clientMux := http.NewServeMux()
-	clientMux.HandleFunc("GET /v1/team/progress", clientHandler.GetTeamProgressHandler)
-	clientMux.HandleFunc("GET /v1/team/solved", clientHandler.GetTeamSolvedHandler)
-	clientMux.HandleFunc("POST /v1/team/reset", clientHandler.ResetTeamHandler)
-	clientMux.HandleFunc("GET /v1/sessions/{sessionId}/board", clientHandler.GetBoardHandler)
+	clientMux.HandleFunc("POST /auth/signup", clientHandler.SignupHandler)
+	clientMux.HandleFunc("POST /auth/login", clientHandler.LoginHandler)
+	clientMux.HandleFunc("GET /team/progress", clientHandler.GetTeamProgressHandler)
+	clientMux.HandleFunc("POST /team/reset", clientHandler.ResetTeamHandler)
+	clientMux.HandleFunc("GET /game/leaderboard", clientHandler.GetLeaderboard)
+	clientMux.HandleFunc("GET /game/master-board", clientHandler.GetMasterBoardHandler)
 
 	// --- Route Registration ---
 	// Mount the authenticated routers with their respective middleware
 	publicMux.Handle("/client/", http.StripPrefix("/client", jwtAuthMiddleware(clientMux)))
 
 	// Public API routes
-	publicMux.HandleFunc("POST /v1/auth/signup", clientHandler.SignupHandler)
-	publicMux.HandleFunc("POST /v1/auth/login", clientHandler.LoginHandler)
-	publicMux.Handle("POST /v1/sessions/start", rateLimiter.Limit(10, 1)(http.HandlerFunc(sessionHandler.StartSession)))
-	publicMux.HandleFunc("GET /v1/leaderboard", leaderboardHandler.GetLeaderboard)
-	publicMux.HandleFunc("GET /v1/game/master-board", leaderboardHandler.GetMasterBoardHandler)
-	publicMux.HandleFunc("GET /v1/sessions/{sessionId}/questions", traitHandler.GetQuestions)
-	publicMux.HandleFunc("GET /v1/sessions/{sessionId}/status", sessionHandler.Status)
-	publicMux.Handle("POST /v1/sessions/{sessionId}/ask", rateLimiter.Limit(60, 5)(http.HandlerFunc(sessionHandler.AskQuestion)))
-	publicMux.HandleFunc("POST /v1/sessions/{sessionId}/decode", traitHandler.Decode)
-	publicMux.HandleFunc("POST /v1/sessions/{sessionId}/guess", sessionHandler.SubmitGuess)
-	publicMux.HandleFunc("POST /v1/sessions/{sessionId}/reveal", sessionHandler.Reveal)
+	publicMux.Handle("POST /sessions/start", rateLimiter.Limit(10, 1)(http.HandlerFunc(sessionHandler.StartSession)))
+	publicMux.HandleFunc("GET /sessions/{sessionId}/questions", traitHandler.GetQuestions)
+	publicMux.HandleFunc("GET /sessions/{sessionId}/status", sessionHandler.Status)
+	publicMux.Handle("POST /sessions/{sessionId}/ask", rateLimiter.Limit(60, 5)(http.HandlerFunc(sessionHandler.AskQuestion)))
+	publicMux.HandleFunc("GET /sessions/{sessionId}/board", sessionHandler.GetBoard)
+	publicMux.HandleFunc("POST /sessions/{sessionId}/decode", traitHandler.Decode)
+	publicMux.HandleFunc("POST /sessions/{sessionId}/guess", sessionHandler.SubmitGuess)
+	publicMux.HandleFunc("POST /sessions/{sessionId}/reveal", sessionHandler.Reveal)
 
 	// Health check endpoint
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -164,15 +162,15 @@ func main() {
 			"service": "Guess Who API",
 			"version": "1.0.0",
 			"endpoints": {
-				"start_session": "POST /v1/sessions/start",
-				"get_board": "GET /v1/sessions/{sessionId}/board",
-				"get_questions": "GET /v1/sessions/{sessionId}/questions",
-				"session_status": "GET /v1/sessions/{sessionId}/status",
-				"ask_question": "POST /v1/sessions/{sessionId}/ask",
-				"decode": "POST /v1/sessions/{sessionId}/decode",
-				"submit_guess": "POST /v1/sessions/{sessionId}/guess",
-				"reveal": "POST /v1/sessions/{sessionId}/reveal",
-				"leaderboard": "GET /v1/leaderboard",
+				"start_session": "POST /sessions/start",
+				"get_board": "GET /sessions/{sessionId}/board",
+				"get_questions": "GET /sessions/{sessionId}/questions",
+				"session_status": "GET /sessions/{sessionId}/status",
+				"ask_question": "POST /sessions/{sessionId}/ask",
+				"decode": "POST /sessions/{sessionId}/decode",
+				"submit_guess": "POST /sessions/{sessionId}/guess",
+				"reveal": "POST /sessions/{sessionId}/reveal",
+				"leaderboard": "GET /leaderboard",
 				"health": "GET /health"
 			}
 		}`))
