@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+	"sort"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -39,7 +40,6 @@ type LoginResponse struct {
 		Name  string `json:"name"`
 		Color string `json:"color"`
 	} `json:"team"`
-	SessionID string `json:"sessionId"`
 }
 
 // TeamSolvedResponse is the response body for the team solved list endpoint.
@@ -48,21 +48,30 @@ type TeamSolvedResponse struct {
 	SolvedCharacterIds []string `json:"solvedCharacterIds"`
 }
 
+// MasterBoardCharacterStatus represents the status of a character on the master board
+type MasterBoardCharacterStatus struct {
+	ID            string   `json:"id"`
+	SolvedBy      []string `json:"solvedBy"`
+	IsSolvedByAll bool     `json:"isSolvedByAll"`
+}
+
+// MasterBoardResponse represents the response for the master board endpoint
+type MasterBoardResponse struct {
+	TotalTeams int                                   `json:"totalTeams"`
+	Characters map[string]MasterBoardCharacterStatus `json:"characters"`
+}
+
 // ClientHandler holds dependencies for the client-facing API handlers.
 type ClientHandler struct {
-	sessionService    service.SessionService
 	store             *db.Store
-	traitCatalog      service.TraitCatalogService
 	encryptionService service.EncryptionService
 	jwtSecret         string
 }
 
 // NewClientHandler creates a new ClientHandler.
-func NewClientHandler(sessionService service.SessionService, store *db.Store, traitCatalog service.TraitCatalogService, encryptionService service.EncryptionService, jwtSecret string) *ClientHandler {
+func NewClientHandler(store *db.Store, encryptionService service.EncryptionService, jwtSecret string) *ClientHandler {
 	return &ClientHandler{
-		sessionService:    sessionService,
 		store:             store,
-		traitCatalog:      traitCatalog,
 		encryptionService: encryptionService,
 		jwtSecret:         jwtSecret,
 	}
@@ -148,13 +157,6 @@ func (h *ClientHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Start a new session for the team
-	session, err := h.sessionService.StartSession(teamID, 64, "normal")
-	if err != nil {
-		http.Error(w, "Failed to start session", http.StatusInternalServerError)
-		return
-	}
-
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(LoginResponse{
@@ -168,7 +170,6 @@ func (h *ClientHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
 			Name:  team.Name,
 			Color: team.Color,
 		},
-		SessionID: session.SessionID,
 	})
 }
 
@@ -188,70 +189,6 @@ func (h *ClientHandler) GetTeamProgressHandler(w http.ResponseWriter, r *http.Re
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(team)
-}
-
-// GetTeamSolvedHandler returns the list of solved characters for the authenticated team
-func (h *ClientHandler) GetTeamSolvedHandler(w http.ResponseWriter, r *http.Request) {
-	teamID, ok := r.Context().Value(middleware.TeamIDKey).(string)
-	if !ok {
-		http.Error(w, "Team ID not found in token", http.StatusUnauthorized)
-		return
-	}
-
-	team, err := h.store.ReadTeamData(r.Context(), teamID)
-	if err != nil {
-		http.Error(w, "Team not found", http.StatusNotFound)
-		return
-	}
-
-	// Ensure SolvedCharacters is not nil for JSON marshaling (empty array instead of null)
-	solved := team.SolvedCharacters
-	if solved == nil {
-		solved = []string{}
-	}
-
-	response := TeamSolvedResponse{
-		TeamID:             teamID,
-		SolvedCharacterIds: solved,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
-}
-
-// GetBoardHandler returns the game board for a given session
-func (h *ClientHandler) GetBoardHandler(w http.ResponseWriter, r *http.Request) {
-	sessionID := r.PathValue("sessionId")
-
-	session, err := h.sessionService.GetSession(sessionID)
-	if err != nil {
-		http.Error(w, "Session not found", http.StatusNotFound)
-		return
-	}
-
-	// Build trait definitions per docs: traitKey, type, values
-	traitDefs := h.traitCatalog.GetAllTraits()
-	defs := make([]map[string]interface{}, 0, len(traitDefs))
-	for _, td := range traitDefs {
-		def := map[string]interface{}{
-			"traitKey": td.TraitKey,
-			"type":     td.Type,
-		}
-		if td.Values != nil && len(td.Values) > 0 {
-			def["values"] = td.Values
-		}
-		defs = append(defs, def)
-	}
-
-	response := map[string]interface{}{
-		"sessionId":        session.SessionID,
-		"candidates":       session.Candidates,
-		"traitDefinitions": defs,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
 }
 
 // ResetTeamHandler resets the team's progress (solved characters and active session)
@@ -280,4 +217,79 @@ func (h *ClientHandler) ResetTeamHandler(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"message": "Team progress reset successfully"})
+}
+
+// GetLeaderboard handles GET /leaderboard
+func (h *ClientHandler) GetLeaderboard(w http.ResponseWriter, r *http.Request) {
+	teamIDs, err := h.store.GetAllTeamIDs(r.Context())
+	if err != nil {
+		http.Error(w, "Failed to get team IDs for leaderboard", http.StatusInternalServerError)
+		return
+	}
+
+	var teams []*db.TeamData
+	for _, teamID := range teamIDs {
+		team, err := h.store.ReadTeamData(r.Context(), teamID)
+		if err != nil {
+			// Log the error but continue; one failing team shouldn't kill the whole leaderboard
+			continue
+		}
+		teams = append(teams, team)
+	}
+
+	sort.Slice(teams, func(i, j int) bool {
+		return teams[i].Score > teams[j].Score
+	})
+
+	response := map[string]interface{}{
+		"entries": teams,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// GetMasterBoardHandler handles GET /game/master-board
+func (h *ClientHandler) GetMasterBoardHandler(w http.ResponseWriter, r *http.Request) {
+	teamIDs, err := h.store.GetAllTeamIDs(r.Context())
+	if err != nil {
+		http.Error(w, "Failed to get team IDs for master board", http.StatusInternalServerError)
+		return
+	}
+
+	totalTeams := len(teamIDs)
+	characterMap := make(map[string]*MasterBoardCharacterStatus)
+
+	for _, teamID := range teamIDs {
+		team, err := h.store.ReadTeamData(r.Context(), teamID)
+		if err != nil {
+			// Log error but continue
+			continue
+		}
+
+		for _, charID := range team.SolvedCharacters {
+			if _, exists := characterMap[charID]; !exists {
+				characterMap[charID] = &MasterBoardCharacterStatus{
+					ID:       charID,
+					SolvedBy: []string{},
+				}
+			}
+			characterMap[charID].SolvedBy = append(characterMap[charID].SolvedBy, teamID)
+		}
+	}
+
+	// Finalize the map values (calculate IsSolvedByAll)
+	finalCharacters := make(map[string]MasterBoardCharacterStatus)
+	for charID, status := range characterMap {
+		status.IsSolvedByAll = len(status.SolvedBy) == totalTeams && totalTeams > 0
+		finalCharacters[charID] = *status
+	}
+
+	response := MasterBoardResponse{
+		TotalTeams: totalTeams,
+		Characters: finalCharacters,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }

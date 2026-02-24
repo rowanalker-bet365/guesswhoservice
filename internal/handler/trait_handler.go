@@ -21,7 +21,7 @@ func NewTraitHandler(traitCatalog service.TraitCatalogService, encryptionService
 	}
 }
 
-// GetQuestions handles GET /v1/sessions/{sessionId}/questions
+// GetQuestions handles GET /sessions/{sessionId}/questions
 func (h *TraitHandler) GetQuestions(w http.ResponseWriter, r *http.Request) {
 	traits := h.traitCatalog.GetAllTraits()
 
@@ -55,7 +55,7 @@ type DecodeResponse struct {
 	Decrypted string `json:"decrypted"`
 }
 
-// Decode handles POST /v1/sessions/{sessionId}/decode
+// Decode handles POST /sessions/{sessionId}/decode
 func (h *TraitHandler) Decode(w http.ResponseWriter, r *http.Request) {
 	var req DecodeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

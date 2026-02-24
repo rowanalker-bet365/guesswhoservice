@@ -37,7 +37,7 @@ type StartSessionResponse struct {
 	ChaosProfile    interface{} `json:"chaosProfile"`
 }
 
-// StartSession handles POST /v1/sessions/start
+// StartSession handles POST /sessions/start
 func (h *SessionHandler) StartSession(w http.ResponseWriter, r *http.Request) {
 	teamID := r.Header.Get("X-Team-Id")
 	if teamID == "" {
@@ -69,7 +69,7 @@ func (h *SessionHandler) StartSession(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-// GetBoard handles GET /v1/sessions/{sessionId}/board
+// GetBoard handles GET /sessions/{sessionId}/board
 func (h *SessionHandler) GetBoard(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("sessionId")
 
@@ -108,7 +108,7 @@ type AskQuestionRequest struct {
 	QuestionID string `json:"questionId"`
 }
 
-// AskQuestion handles POST /v1/sessions/{sessionId}/ask
+// AskQuestion handles POST /sessions/{sessionId}/ask
 func (h *SessionHandler) AskQuestion(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("sessionId")
 
@@ -134,7 +134,7 @@ type GuessRequest struct {
 	Evidence    []map[string]interface{} `json:"evidence,omitempty"`
 }
 
-// SubmitGuess handles POST /v1/sessions/{sessionId}/guess
+// SubmitGuess handles POST /sessions/{sessionId}/guess
 func (h *SessionHandler) SubmitGuess(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("sessionId")
 
@@ -184,7 +184,7 @@ func (h *SessionHandler) SubmitGuess(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-// Status handles GET /v1/sessions/{sessionId}/status
+// Status handles GET /sessions/{sessionId}/status
 func (h *SessionHandler) Status(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("sessionId")
 
@@ -207,7 +207,7 @@ func (h *SessionHandler) Status(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-// Reveal handles POST /v1/sessions/{sessionId}/reveal
+// Reveal handles POST /sessions/{sessionId}/reveal
 func (h *SessionHandler) Reveal(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("sessionId")
 
