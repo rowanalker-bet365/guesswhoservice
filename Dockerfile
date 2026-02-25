@@ -31,6 +31,9 @@ WORKDIR /app
 # Copy the built binary from the builder stage.
 COPY --from=builder /app/server .
 
+# Copy the data directory (contains characters.json required at runtime).
+COPY --from=builder /app/data ./data
+
 # Expose the port the application will run on.
 # The default for Cloud Run is 8080.
 EXPOSE 8080
