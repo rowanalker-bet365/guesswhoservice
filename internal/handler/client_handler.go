@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"time"
-	"sort"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -42,31 +41,55 @@ type LoginResponse struct {
 	} `json:"team"`
 }
 
+// TeamProgressResponse is the JSON shape returned by GetTeamProgressHandler.
+// Field names and types match the UI's TeamData interface exactly.
+type TeamProgressResponse struct {
+	ID                  string               `json:"id"`
+	TeamName            string               `json:"teamName"`
+	TeamColor           string               `json:"teamColor"`
+	ChallengeStartTime  string               `json:"challengeStartTime"`
+	TotalSolves         int                  `json:"totalSolves"`
+	SolvedCharacters    []string             `json:"solvedCharacters"`
+	FastestSolve        int64                `json:"fastestSolve"` // milliseconds
+	TotalScore          int                  `json:"totalScore"`
+	CompletedMilestones []CompletedMilestone `json:"completedMilestones"`
+}
+
+// CompletedMilestone is a single milestone entry in TeamProgressResponse.
+type CompletedMilestone struct {
+	ID        string `json:"id"`
+	TimeTaken string `json:"timeTaken"`
+}
+
 // MasterBoardCharacterStatus represents the status of a character on the master board
 type MasterBoardCharacterStatus struct {
-	ID            string   `json:"id"`
-	SolvedBy      []string `json:"solvedBy"`
-	IsSolvedByAll bool     `json:"isSolvedByAll"`
+	ID            string `json:"id"`
+	ImagePath     string `json:"imagePath"`
+	SolvedByTeams []struct {
+		TeamID string `json:"teamId"`
+		Color  string `json:"color"`
+	} `json:"solvedByTeams"`
 }
 
 // MasterBoardResponse represents the response for the master board endpoint
 type MasterBoardResponse struct {
-	TotalTeams int                                   `json:"totalTeams"`
-	Characters map[string]MasterBoardCharacterStatus `json:"characters"`
+	Characters []MasterBoardCharacterStatus `json:"characters"`
 }
 
 // ClientHandler holds dependencies for the client-facing API handlers.
 type ClientHandler struct {
-	store             *db.Store
+	store            *db.Store
 	encryptionService service.EncryptionService
+	characterCatalog  service.CharacterCatalogService
 	jwtSecret         string
 }
 
 // NewClientHandler creates a new ClientHandler.
-func NewClientHandler(store *db.Store, encryptionService service.EncryptionService, jwtSecret string) *ClientHandler {
+func NewClientHandler(store *db.Store, encryptionService service.EncryptionService, characterCatalog service.CharacterCatalogService, jwtSecret string) *ClientHandler {
 	return &ClientHandler{
 		store:             store,
 		encryptionService: encryptionService,
+		characterCatalog:  characterCatalog,
 		jwtSecret:         jwtSecret,
 	}
 }
@@ -167,7 +190,8 @@ func (h *ClientHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetTeamProgressHandler returns the private progress for the authenticated team
+// GetTeamProgressHandler returns the private progress for the authenticated team.
+// The response is shaped to match the UI's TeamData interface.
 func (h *ClientHandler) GetTeamProgressHandler(w http.ResponseWriter, r *http.Request) {
 	teamID, ok := r.Context().Value(middleware.TeamIDKey).(string)
 	if !ok {
@@ -180,9 +204,33 @@ func (h *ClientHandler) GetTeamProgressHandler(w http.ResponseWriter, r *http.Re
 		http.Error(w, "Team not found", http.StatusNotFound)
 		return
 	}
+
+	// Convert milestones []string → []CompletedMilestone (timeTaken not yet tracked, default "").
+	milestones := make([]CompletedMilestone, 0, len(team.Milestones))
+	for _, m := range team.Milestones {
+		if m != "" {
+			milestones = append(milestones, CompletedMilestone{ID: m, TimeTaken: ""})
+		}
+	}
+
+	resp := TeamProgressResponse{
+		ID:                  teamID,
+		TeamName:            team.Name,
+		TeamColor:           team.Color,
+		ChallengeStartTime:  team.RegisteredAt.Format(time.RFC3339),
+		TotalSolves:         team.Solves,
+		SolvedCharacters:    team.SolvedCharacters,
+		FastestSolve:        team.FastestSolve.Milliseconds(),
+		TotalScore:          team.Score,
+		CompletedMilestones: milestones,
+	}
+	if resp.SolvedCharacters == nil {
+		resp.SolvedCharacters = []string{}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(team)
+	json.NewEncoder(w).Encode(resp)
 }
 // ResetTeamHandler resets the team's progress (solved characters and active session)
 func (h *ClientHandler) ResetTeamHandler(w http.ResponseWriter, r *http.Request) {
@@ -212,74 +260,92 @@ func (h *ClientHandler) ResetTeamHandler(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(map[string]string{"message": "Team progress reset successfully"})
 }
 
-// GetLeaderboard handles GET /leaderboard
+// GetLeaderboard handles GET /leaderboard.
+// It reads rankings directly from the "leaderboard" sorted set (ZREVRANGE … WITHSCORES)
+// and pipelines team detail lookups to avoid N+1 Redis round-trips.
 func (h *ClientHandler) GetLeaderboard(w http.ResponseWriter, r *http.Request) {
-	teamIDs, err := h.store.GetAllTeamIDs(r.Context())
+	entries, err := h.store.GetLeaderboardEntries(r.Context())
 	if err != nil {
-		http.Error(w, "Failed to get team IDs for leaderboard", http.StatusInternalServerError)
+		http.Error(w, "Failed to get leaderboard", http.StatusInternalServerError)
 		return
 	}
 
-	var teams []*db.TeamData
-	for _, teamID := range teamIDs {
-		team, err := h.store.ReadTeamData(r.Context(), teamID)
-		if err != nil {
-			// Log the error but continue; one failing team shouldn't kill the whole leaderboard
-			continue
-		}
-		teams = append(teams, team)
-	}
-
-	sort.Slice(teams, func(i, j int) bool {
-		return teams[i].Score > teams[j].Score
-	})
-
 	response := map[string]interface{}{
-		"entries": teams,
+		"entries": entries,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 
-// GetMasterBoardHandler handles GET /game/master-board
+// GetMasterBoardHandler handles GET /game/master-board.
+// It reads from the "masterboard:<character_id>" sets that are populated atomically
+// by the Lua script on each correct solve, rather than iterating over all teams.
 func (h *ClientHandler) GetMasterBoardHandler(w http.ResponseWriter, r *http.Request) {
-	teamIDs, err := h.store.GetAllTeamIDs(r.Context())
+	// GetMasterboardFromSets uses HKEYS "masterboard" for the full character list,
+	// then pipelines SMEMBERS "masterboard:<id>" for each character.
+	masterboardData, err := h.store.GetMasterboardFromSets(r.Context())
 	if err != nil {
-		http.Error(w, "Failed to get team IDs for master board", http.StatusInternalServerError)
+		http.Error(w, "Failed to get masterboard data", http.StatusInternalServerError)
 		return
 	}
 
-	totalTeams := len(teamIDs)
-	characterMap := make(map[string]*MasterBoardCharacterStatus)
-
-	for _, teamID := range teamIDs {
-		team, err := h.store.ReadTeamData(r.Context(), teamID)
-		if err != nil {
-			// Log error but continue
-			continue
-		}
-
-		for _, charID := range team.SolvedCharacters {
-			if _, exists := characterMap[charID]; !exists {
-				characterMap[charID] = &MasterBoardCharacterStatus{
-					ID:       charID,
-					SolvedBy: []string{},
-				}
-			}
-			characterMap[charID].SolvedBy = append(characterMap[charID].SolvedBy, teamID)
+	// Collect the unique set of team IDs that appear anywhere on the masterboard
+	// so we can batch the color lookups in a single pipeline.
+	teamIDSet := make(map[string]struct{})
+	for _, solvedBy := range masterboardData {
+		for _, teamID := range solvedBy {
+			teamIDSet[teamID] = struct{}{}
 		}
 	}
+	uniqueTeamIDs := make([]string, 0, len(teamIDSet))
+	for teamID := range teamIDSet {
+		uniqueTeamIDs = append(uniqueTeamIDs, teamID)
+	}
 
-	// Finalize the map values (calculate IsSolvedByAll)
-	finalCharacters := make(map[string]MasterBoardCharacterStatus)
-	for charID, status := range characterMap {
-		status.IsSolvedByAll = len(status.SolvedBy) == totalTeams && totalTeams > 0
-		finalCharacters[charID] = *status
+	// Fetch all team colors in one pipelined batch via the store helper.
+	teamColors, err := h.store.GetTeamColors(r.Context(), uniqueTeamIDs)
+	if err != nil {
+		// Non-fatal: fall back to default colors rather than failing the whole request.
+		teamColors = map[string]string{}
+	}
+
+	var finalCharacters []MasterBoardCharacterStatus
+	for charID, solvedBy := range masterboardData {
+		solvedByTeams := make([]struct {
+			TeamID string `json:"teamId"`
+			Color  string `json:"color"`
+		}, 0, len(solvedBy))
+
+		for _, teamID := range solvedBy {
+			color := teamColors[teamID]
+			if color == "" {
+				color = "#000000"
+			}
+			solvedByTeams = append(solvedByTeams, struct {
+				TeamID string `json:"teamId"`
+				Color  string `json:"color"`
+			}{
+				TeamID: teamID,
+				Color:  color,
+			})
+		}
+
+		// Look up the canonical image path from the character catalog.
+		// Fall back to a predictable default if the character is not found.
+		imagePath := fmt.Sprintf("/public/images/%s.png", charID)
+		if char, ok := h.characterCatalog.GetCharacterByID(charID); ok {
+			imagePath = char.ImagePath
+		}
+
+		finalCharacters = append(finalCharacters, MasterBoardCharacterStatus{
+			ID:            charID,
+			ImagePath:     imagePath,
+			SolvedByTeams: solvedByTeams,
+		})
 	}
 
 	response := MasterBoardResponse{
-		TotalTeams: totalTeams,
 		Characters: finalCharacters,
 	}
 

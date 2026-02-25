@@ -76,9 +76,9 @@ func main() {
 	})
 
 	// Ping Redis to check the connection
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if _, err := redisClient.Ping(ctx).Result(); err != nil {
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer pingCancel()
+	if _, err := redisClient.Ping(pingCtx).Result(); err != nil {
 		log.Printf("Failed to connect to Redis at %s. Error: %v", cfg.RedisAddr, err)
 		log.Fatalf("Exiting due to Redis connection failure.")
 	}
@@ -89,6 +89,24 @@ func main() {
 
 	// Initialize services
 	traitCatalog := service.NewTraitCatalogService()
+
+	// Load Character Catalog
+	characterCatalog, err := service.NewCharacterCatalogService("data/characters.json")
+	if err != nil {
+		log.Fatalf("Failed to load character catalog: %v", err)
+	}
+	log.Printf("✅ Successfully loaded %d characters", len(characterCatalog.GetAllCharacters()))
+
+	// Initialize Masterboard using a fresh background context (not the ping timeout context).
+	var charIDs []string
+	for _, char := range characterCatalog.GetAllCharacters() {
+		charIDs = append(charIDs, char.CandidateID)
+	}
+	if err := dbStore.InitializeMasterboard(context.Background(), charIDs); err != nil {
+		log.Fatalf("Failed to initialize masterboard: %v", err)
+	}
+	log.Println("✅ Masterboard initialized (or already exists)")
+
 	boardGenerator := service.NewBoardGeneratorService()
 	encryptionService := service.NewEncryptionService()
 	chaosService := service.NewChaosService(cfg.ChaosEnabled)
@@ -111,7 +129,7 @@ func main() {
 	// Initialize handlers
 	sessionHandler := handler.NewSessionHandler(sessionService, traitCatalog)
 	traitHandler := handler.NewTraitHandler(traitCatalog, encryptionService)
-	clientHandler := handler.NewClientHandler(dbStore, encryptionService, cfg.JWTSecret)
+	clientHandler := handler.NewClientHandler(dbStore, encryptionService, characterCatalog, cfg.JWTSecret)
 
 	// Initialize middleware
 	rateLimiter := custommiddleware.NewRateLimiter(cfg.RateLimitEnabled)
