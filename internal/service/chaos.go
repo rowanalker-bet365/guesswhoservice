@@ -11,6 +11,10 @@ import (
 type ChaosService interface {
 	ShouldFail(session *domain.Session, traitDef *domain.TraitDefinition) bool
 	GetRetryDelay() int
+	// IsInChaosWindow returns true when the session is currently inside a chaos
+	// window — i.e. the elapsed time falls within the failure-injection period.
+	// Used by MilestoneService to determine whether S3 (Resilience) can be awarded.
+	IsInChaosWindow(session *domain.Session) bool
 }
 
 type chaosService struct {
@@ -50,6 +54,13 @@ func (s *chaosService) ShouldFail(session *domain.Session, traitDef *domain.Trai
 func (s *chaosService) GetRetryDelay() int {
 	// Random retry delay between 500ms and 2000ms
 	return 500 + s.rng.Intn(1500)
+}
+
+// IsInChaosWindow is the public implementation of the ChaosService interface method.
+// It delegates to the unexported isInChaosWindow helper so the internal logic
+// remains shared between ShouldFail and this public method.
+func (s *chaosService) IsInChaosWindow(session *domain.Session) bool {
+	return s.isInChaosWindow(session)
 }
 
 func (s *chaosService) isInChaosWindow(session *domain.Session) bool {

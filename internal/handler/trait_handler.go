@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/guesswho/internal/domain"
+	"github.com/guesswho/internal/middleware"
 	"github.com/guesswho/internal/service"
 )
 
@@ -11,13 +13,15 @@ import (
 type TraitHandler struct {
 	traitCatalog      service.TraitCatalogService
 	encryptionService service.EncryptionService
+	milestoneService  service.MilestoneService
 }
 
 // NewTraitHandler creates a new trait handler
-func NewTraitHandler(traitCatalog service.TraitCatalogService, encryptionService service.EncryptionService) *TraitHandler {
+func NewTraitHandler(traitCatalog service.TraitCatalogService, encryptionService service.EncryptionService, milestoneService service.MilestoneService) *TraitHandler {
 	return &TraitHandler{
 		traitCatalog:      traitCatalog,
 		encryptionService: encryptionService,
+		milestoneService:  milestoneService,
 	}
 }
 
@@ -67,6 +71,12 @@ func (h *TraitHandler) Decode(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "Failed to decode: "+err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	// M5: Encrypted Answer Handled — awarded once when a team successfully decodes
+	// an encrypted trait answer. The teamID is extracted from the JWT context.
+	if teamID, ok := r.Context().Value(middleware.TeamIDKey).(string); ok && teamID != "" {
+		h.milestoneService.AwardIfAbsent(r.Context(), teamID, domain.MilestoneM5)
 	}
 
 	response := DecodeResponse{
