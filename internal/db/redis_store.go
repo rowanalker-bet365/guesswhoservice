@@ -429,3 +429,9 @@ func (s *Store) GetMasterboardFromSets(ctx context.Context) (map[string][]string
 	}
 	return result, nil
 }
+
+// FlushAll deletes every key in the current Redis database.
+// Use this to wipe all data before a fresh hackathon run.
+func (s *Store) FlushAll(ctx context.Context) error {
+	return s.client.FlushDB(ctx).Err()
+}

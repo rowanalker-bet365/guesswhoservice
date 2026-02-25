@@ -132,6 +132,8 @@ func main() {
 	sessionHandler := handler.NewSessionHandler(sessionService, traitCatalog)
 	traitHandler := handler.NewTraitHandler(traitCatalog, encryptionService, milestoneService)
 	clientHandler := handler.NewClientHandler(dbStore, encryptionService, characterCatalog, cfg.JWTSecret)
+	debugAPIKey := cfg.DebugAPIKey
+	debugHandler := handler.NewDebugHandler(dbStore, debugAPIKey)
 
 	// Initialize middleware
 	rateLimiter := custommiddleware.NewRateLimiter(cfg.RateLimitEnabled)
@@ -170,6 +172,10 @@ func main() {
 	publicMux.HandleFunc("POST /sessions/{sessionId}/decode", traitHandler.Decode)
 	publicMux.HandleFunc("POST /sessions/{sessionId}/guess", sessionHandler.SubmitGuess)
 	publicMux.HandleFunc("POST /sessions/{sessionId}/reveal", sessionHandler.Reveal)
+
+	// Debug routes
+	mux.HandleFunc("GET /debug/team/{teamId}", debugHandler.GetTeamDebug)
+	mux.HandleFunc("POST /debug/flush", debugHandler.FlushAll)
 
 	// Health check endpoint
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
