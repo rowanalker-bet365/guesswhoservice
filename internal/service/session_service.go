@@ -14,6 +14,7 @@ import (
 	"github.com/guesswho/internal/domain"
 )
 
+
 // SessionService manages game sessions
 type SessionService interface {
 	StartSession(teamID string, boardSize int, difficulty string) (*domain.Session, error)
@@ -92,7 +93,7 @@ func (s *sessionService) StartSession(teamID string, boardSize int, difficulty s
 		IntervalSeconds: s.chaosInterval,
 	}
 
-	session := domain.NewSession(sessionID, teamID, boardSize, 1, seed, chaosProfile)
+	session := domain.NewSession(sessionID, teamID, boardSize, 3, seed, chaosProfile)
 
 	// Generate board
 	candidates, err := s.boardGenerator.GenerateBoard(seed, boardSize, s.traitCatalog)
@@ -123,11 +124,12 @@ func (s *sessionService) StartSession(teamID string, boardSize int, difficulty s
 		}
 	}
 
+	// Track whether a full reset occurred before overwriting availableCandidates.
+	resetOccurred := len(availableCandidates) == 0
+
 	// If all candidates are solved, reset the solved list and use all candidates
-	if len(availableCandidates) == 0 {
+	if resetOccurred {
 		availableCandidates = candidates
-		teamData.SolvedCharacters = []string{}
-		// We will update the team data below with the new session ID, so the cleared list will be saved then.
 	}
 
 	session.Candidates = availableCandidates
@@ -150,10 +152,17 @@ func (s *sessionService) StartSession(teamID string, boardSize int, difficulty s
 		return nil, fmt.Errorf("failed to save session: %w", err)
 	}
 
-	// Update team's active session
-	teamData.ActiveSessionID = sessionID
-	if err := s.dbStore.WriteTeamData(context.Background(), teamID, teamData); err != nil {
-		return nil, fmt.Errorf("failed to update team data: %w", err)
+	// If all characters were solved, clear the solved set in Redis so the team starts fresh.
+	if resetOccurred {
+		if err := s.dbStore.ClearSolvedCharacters(context.Background(), teamID); err != nil {
+			log.Printf("Warning: failed to clear solved characters for team %s: %v", teamID, err)
+		}
+	}
+
+	// Set the active session ID using a targeted HSET — do NOT use WriteTeamData here,
+	// as that would overwrite score/solves/solved-characters with the stale snapshot.
+	if err := s.dbStore.SetActiveSession(context.Background(), teamID, sessionID); err != nil {
+		return nil, fmt.Errorf("failed to update active session for team %s: %w", teamID, err)
 	}
 
 	return session, nil
@@ -258,9 +267,9 @@ func (s *sessionService) SubmitGuess(sessionID string, candidateID string) (*dom
 			Base:               0,
 			TimeBonus:          0,
 			QuestionBonus:      0,
-			ReliabilityPenalty: 500,
+			ReliabilityPenalty: 200,
 		}
-		totalScore = -500
+		totalScore = -200
 	}
 
 	// Update session state
@@ -272,6 +281,10 @@ func (s *sessionService) SubmitGuess(sessionID string, candidateID string) (*dom
 		// Mark session as complete immediately on correct guess
 		session.MarkComplete(true)
 	} else {
+		// Wrong guess: apply -200 penalty immediately, regardless of whether the session ends.
+		if err := s.dbStore.IncrementTeamScore(context.Background(), session.TeamID, -200); err != nil {
+			log.Printf("Error applying wrong-guess penalty for team %s: %v", session.TeamID, err)
+		}
 		session.DecrementGuess()
 	}
 
@@ -296,7 +309,7 @@ func (s *sessionService) SubmitGuess(sessionID string, candidateID string) (*dom
 				finalScore = 0
 			}
 		} else {
-			finalScore = -500
+			finalScore = 0
 		}
 
 		// Update team stats including solved characters and clearing active session
@@ -345,13 +358,9 @@ func (s *sessionService) Reveal(sessionID string) (*domain.RevealResult, error) 
 		session.MarkComplete(session.CorrectGuess)
 		_ = s.dbStore.WriteSession(context.Background(), session)
 
-		// Clear active session ID for the team, but do not update stats/score for a reveal
-		// unless it was already correct (which shouldn't happen if we are revealing to end it)
-		teamData, err := s.dbStore.ReadTeamData(context.Background(), session.TeamID)
-		if err == nil {
-			teamData.ActiveSessionID = ""
-			_ = s.dbStore.WriteTeamData(context.Background(), session.TeamID, teamData)
-		}
+		// Clear active session ID for the team using a targeted HSET to avoid
+		// clobbering concurrent Lua script updates to score/solves.
+		_ = s.dbStore.ClearActiveSession(context.Background(), session.TeamID)
 	}
 
 	res := &domain.RevealResult{
@@ -368,42 +377,25 @@ func (s *sessionService) Reveal(sessionID string) (*domain.RevealResult, error) 
 
 func (s *sessionService) updateTeamStats(session *domain.Session, score int, correct bool, solvedCandidateID string) {
 	ctx := context.Background()
-	teamData, err := s.dbStore.ReadTeamData(ctx, session.TeamID)
-	if err != nil && err != redis.Nil {
-		log.Printf("Error reading team data for %s: %v", session.TeamID, err)
-		return
-	}
-	if err == redis.Nil {
-		// This case should ideally not happen if teams are created before sessions
-		teamData = &db.TeamData{}
-	}
 
-	teamData.Score += score
-	if correct {
-		teamData.Solves++
+	if correct && solvedCandidateID != "" {
+		// Atomically update score, solves, solved-characters set, leaderboard, and masterboard
+		// in a single Lua script to prevent race conditions.
+		if err := s.dbStore.UpdateTeamStatsAtomic(ctx, session.TeamID, solvedCandidateID, score); err != nil {
+			log.Printf("Error in atomic team stats update for team %s: %v", session.TeamID, err)
+			return
+		}
+
+		// Conditionally update fastest solve time (atomic compare-and-set via Lua).
 		elapsed := time.Duration(session.GetElapsedTime()) * time.Second
-		if teamData.FastestSolve == 0 || elapsed < teamData.FastestSolve {
-			teamData.FastestSolve = elapsed
-		}
-		if solvedCandidateID != "" {
-			// Add to solved characters if not already present
-			alreadySolved := false
-			for _, id := range teamData.SolvedCharacters {
-				if id == solvedCandidateID {
-					alreadySolved = true
-					break
-				}
-			}
-			if !alreadySolved {
-				teamData.SolvedCharacters = append(teamData.SolvedCharacters, solvedCandidateID)
-			}
+		if err := s.dbStore.UpdateFastestSolve(ctx, session.TeamID, elapsed); err != nil {
+			log.Printf("Error updating fastest solve for team %s: %v", session.TeamID, err)
 		}
 	}
+	// Wrong-guess penalties are applied immediately in SubmitGuess, not here.
 
-	// Clear active session
-	teamData.ActiveSessionID = ""
-
-	if err := s.dbStore.WriteTeamData(ctx, session.TeamID, teamData); err != nil {
-		log.Printf("Error writing team data for %s: %v", session.TeamID, err)
+	// Clear the active session ID so the team can start a new session.
+	if err := s.dbStore.ClearActiveSession(ctx, session.TeamID); err != nil {
+		log.Printf("Error clearing active session for team %s: %v", session.TeamID, err)
 	}
 }
