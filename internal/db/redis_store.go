@@ -282,6 +282,18 @@ func (s *Store) ClearActiveSession(ctx context.Context, teamID string) error {
 	return s.client.HSet(ctx, "team:"+teamID, "active_session_id", "").Err()
 }
 
+// SetActiveSession sets the active_session_id field for a team to the given session ID.
+// This is a targeted HSET that does not touch any other team fields.
+func (s *Store) SetActiveSession(ctx context.Context, teamID, sessionID string) error {
+	return s.client.HSet(ctx, "team:"+teamID, "active_session_id", sessionID).Err()
+}
+
+// ClearSolvedCharacters removes all members from the team's solved-characters set.
+// Used when a team has solved all characters and needs to start fresh.
+func (s *Store) ClearSolvedCharacters(ctx context.Context, teamID string) error {
+	return s.client.Del(ctx, "team:"+teamID+":solved_characters").Err()
+}
+
 // UpdateFastestSolve conditionally updates the fastest solve time using a Lua script
 // so the comparison and write are atomic.
 func (s *Store) UpdateFastestSolve(ctx context.Context, teamID string, elapsed time.Duration) error {
