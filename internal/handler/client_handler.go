@@ -9,10 +9,10 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/guesswho/internal/db"
+	"github.com/guesswho/internal/domain"
 	"github.com/guesswho/internal/middleware"
 	"github.com/guesswho/internal/service"
 )
-
 
 // SignupRequest is the request body for the signup endpoint.
 type SignupRequest struct {
@@ -59,6 +59,8 @@ type TeamProgressResponse struct {
 // CompletedMilestone is a single milestone entry in TeamProgressResponse.
 type CompletedMilestone struct {
 	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Score     int    `json:"score"`
 	TimeTaken string `json:"timeTaken"`
 }
 
@@ -79,7 +81,7 @@ type MasterBoardResponse struct {
 
 // ClientHandler holds dependencies for the client-facing API handlers.
 type ClientHandler struct {
-	store            *db.Store
+	store             *db.Store
 	encryptionService service.EncryptionService
 	characterCatalog  service.CharacterCatalogService
 	jwtSecret         string
@@ -206,11 +208,27 @@ func (h *ClientHandler) GetTeamProgressHandler(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Convert milestones []string → []CompletedMilestone (timeTaken not yet tracked, default "").
+	// Build a lookup map from milestone ID → name + score using the domain metadata.
+	type milestoneMeta struct {
+		Name  string
+		Score int
+	}
+	metaByID := make(map[string]milestoneMeta, len(domain.AllMilestones))
+	for _, mi := range domain.AllMilestones {
+		metaByID[string(mi.ID)] = milestoneMeta{Name: mi.Name, Score: mi.Score}
+	}
+
+	// Convert milestones []string → []CompletedMilestone with name + score populated.
 	milestones := make([]CompletedMilestone, 0, len(team.Milestones))
 	for _, m := range team.Milestones {
 		if m != "" {
-			milestones = append(milestones, CompletedMilestone{ID: m, TimeTaken: ""})
+			meta := metaByID[m]
+			milestones = append(milestones, CompletedMilestone{
+				ID:        m,
+				Name:      meta.Name,
+				Score:     meta.Score,
+				TimeTaken: "",
+			})
 		}
 	}
 
@@ -234,6 +252,7 @@ func (h *ClientHandler) GetTeamProgressHandler(w http.ResponseWriter, r *http.Re
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(resp)
 }
+
 // ResetTeamHandler resets the team's progress (solved characters and active session)
 func (h *ClientHandler) ResetTeamHandler(w http.ResponseWriter, r *http.Request) {
 	teamID, ok := r.Context().Value(middleware.TeamIDKey).(string)

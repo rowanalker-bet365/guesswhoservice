@@ -294,6 +294,14 @@ func (s *Store) ClearSolvedCharacters(ctx context.Context, teamID string) error 
 	return s.client.Del(ctx, "team:"+teamID+":solved_characters").Err()
 }
 
+// SetMilestones updates only the milestones field in the team hash.
+// This is a targeted HSET that does not touch any other team fields,
+// analogous to SetActiveSession. The milestones slice is stored as a
+// comma-separated string, matching the format used by WriteTeamData and ReadTeamData.
+func (s *Store) SetMilestones(ctx context.Context, teamID string, milestones []string) error {
+	return s.client.HSet(ctx, "team:"+teamID, "milestones", strings.Join(milestones, ",")).Err()
+}
+
 // UpdateFastestSolve conditionally updates the fastest solve time using a Lua script
 // so the comparison and write are atomic.
 func (s *Store) UpdateFastestSolve(ctx context.Context, teamID string, elapsed time.Duration) error {

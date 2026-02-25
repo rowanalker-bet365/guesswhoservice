@@ -14,7 +14,6 @@ import (
 	"github.com/guesswho/internal/domain"
 )
 
-
 // SessionService manages game sessions
 type SessionService interface {
 	StartSession(teamID string, boardSize int, difficulty string) (*domain.Session, error)
@@ -31,6 +30,7 @@ type sessionService struct {
 	encryptionService EncryptionService
 	chaosService      ChaosService
 	scoringService    ScoringService
+	milestoneService  MilestoneService
 	chaosEnabled      bool
 	chaosInterval     int
 	chaosWindow       int
@@ -51,6 +51,7 @@ func NewSessionService(
 	encryptionService EncryptionService,
 	chaosService ChaosService,
 	scoringService ScoringService,
+	milestoneService MilestoneService,
 	config SessionServiceConfig,
 ) SessionService {
 	return &sessionService{
@@ -60,6 +61,7 @@ func NewSessionService(
 		encryptionService: encryptionService,
 		chaosService:      chaosService,
 		scoringService:    scoringService,
+		milestoneService:  milestoneService,
 		chaosEnabled:      config.ChaosEnabled,
 		chaosInterval:     config.ChaosInterval,
 		chaosWindow:       config.ChaosWindow,
@@ -165,6 +167,9 @@ func (s *sessionService) StartSession(teamID string, boardSize int, difficulty s
 		return nil, fmt.Errorf("failed to update active session for team %s: %w", teamID, err)
 	}
 
+	// M1: First Round Started — awarded once when a team starts their first session.
+	s.milestoneService.AwardIfAbsent(context.Background(), teamID, domain.MilestoneM1)
+
 	return session, nil
 }
 
@@ -210,6 +215,20 @@ func (s *sessionService) AskQuestion(sessionID string, questionID string) (*doma
 	// Record the question
 	session.RecordQuestion(questionID)
 	s.dbStore.WriteSession(context.Background(), session)
+
+	// M2: First Successful Question — awarded after the first non-degraded answer.
+	s.milestoneService.AwardIfAbsent(context.Background(), session.TeamID, domain.MilestoneM2)
+
+	// M3: Elimination Working — awarded when ≥ 3 questions have been asked in a session.
+	if session.GetQuestionsAskedCount() >= 3 {
+		s.milestoneService.AwardIfAbsent(context.Background(), session.TeamID, domain.MilestoneM3)
+	}
+
+	// S3: Resilience — awarded when a successful answer is received for a flaky trait
+	// while the session is inside a chaos window. Chaos must be enabled for this to trigger.
+	if traitDef.IsFlaky && s.chaosService.IsInChaosWindow(session) {
+		s.milestoneService.AwardIfAbsent(context.Background(), session.TeamID, domain.MilestoneS3)
+	}
 
 	// Build response
 	traitAnswer := &domain.TraitAnswer{
@@ -280,6 +299,14 @@ func (s *sessionService) SubmitGuess(sessionID string, candidateID string) (*dom
 		session.CorrectGuess = true
 		// Mark session as complete immediately on correct guess
 		session.MarkComplete(true)
+
+		// M4: First Correct Solve — awarded on the first correct guess.
+		s.milestoneService.AwardIfAbsent(context.Background(), session.TeamID, domain.MilestoneM4)
+
+		// S1: Efficiency — awarded when a character is solved with ≤ 10 questions.
+		if session.GetQuestionsAskedCount() <= 10 {
+			s.milestoneService.AwardIfAbsent(context.Background(), session.TeamID, domain.MilestoneS1)
+		}
 	} else {
 		// Wrong guess: apply -200 penalty immediately, regardless of whether the session ends.
 		if err := s.dbStore.IncrementTeamScore(context.Background(), session.TeamID, -200); err != nil {
@@ -314,6 +341,14 @@ func (s *sessionService) SubmitGuess(sessionID string, candidateID string) (*dom
 
 		// Update team stats including solved characters and clearing active session
 		s.updateTeamStats(session, finalScore, finalCorrect, candidateID)
+
+		// S2: Automation — awarded once the team reaches 3+ total correct solves.
+		// Read the updated solve count after updateTeamStats has incremented it.
+		if finalCorrect {
+			if teamData, err := s.dbStore.ReadTeamData(context.Background(), session.TeamID); err == nil && teamData.Solves >= 3 {
+				s.milestoneService.AwardIfAbsent(context.Background(), session.TeamID, domain.MilestoneS2)
+			}
+		}
 	}
 
 	// Publish an update now that all data is persisted, regardless of guess correctness.

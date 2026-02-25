@@ -111,6 +111,7 @@ func main() {
 	encryptionService := service.NewEncryptionService()
 	chaosService := service.NewChaosService(cfg.ChaosEnabled)
 	scoringService := service.NewScoringService()
+	milestoneService := service.NewMilestoneService(dbStore)
 
 	sessionService := service.NewSessionService(
 		dbStore,
@@ -119,6 +120,7 @@ func main() {
 		encryptionService,
 		chaosService,
 		scoringService,
+		milestoneService,
 		service.SessionServiceConfig{
 			ChaosEnabled:  cfg.ChaosEnabled,
 			ChaosInterval: cfg.ChaosIntervalSeconds,
@@ -128,7 +130,7 @@ func main() {
 
 	// Initialize handlers
 	sessionHandler := handler.NewSessionHandler(sessionService, traitCatalog)
-	traitHandler := handler.NewTraitHandler(traitCatalog, encryptionService)
+	traitHandler := handler.NewTraitHandler(traitCatalog, encryptionService, milestoneService)
 	clientHandler := handler.NewClientHandler(dbStore, encryptionService, characterCatalog, cfg.JWTSecret)
 	debugAPIKey := cfg.DebugAPIKey
 	debugHandler := handler.NewDebugHandler(dbStore, debugAPIKey)
@@ -139,7 +141,7 @@ func main() {
 
 	// Setup mux with Go 1.22+ patterns
 	mux := http.NewServeMux()
-	
+
 	// --- Router Setup ---
 	// Main router for public endpoints
 	publicMux := mux
