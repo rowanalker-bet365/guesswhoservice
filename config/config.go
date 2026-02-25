@@ -16,6 +16,7 @@ type Config struct {
 	RedisPassword        string
 	ServiceURL           string
 	JWTSecret            string
+	DebugAPIKey          string
 }
 
 // Load loads configuration from environment variables
@@ -29,6 +30,7 @@ func Load() *Config {
 		RedisAddr:            getEnv("REDIS_ADDR", "localhost:6379"),
 		ServiceURL:           getEnv("GUESSWHOSERVICE_URL", ""),
 		JWTSecret:            getEnv("JWT_SECRET", "a-very-secret-key"),
+		DebugAPIKey:          os.Getenv("DEBUG_API_KEY"),
 	}
 }
 
