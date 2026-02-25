@@ -53,6 +53,7 @@ type TeamProgressResponse struct {
 	FastestSolve        int64                `json:"fastestSolve"` // milliseconds
 	TotalScore          int                  `json:"totalScore"`
 	CompletedMilestones []CompletedMilestone `json:"completedMilestones"`
+	ActiveSessionID     string               `json:"activeSessionId"`
 }
 
 // CompletedMilestone is a single milestone entry in TeamProgressResponse.
@@ -223,6 +224,7 @@ func (h *ClientHandler) GetTeamProgressHandler(w http.ResponseWriter, r *http.Re
 		FastestSolve:        team.FastestSolve.Milliseconds(),
 		TotalScore:          team.Score,
 		CompletedMilestones: milestones,
+		ActiveSessionID:     team.ActiveSessionID,
 	}
 	if resp.SolvedCharacters == nil {
 		resp.SolvedCharacters = []string{}
