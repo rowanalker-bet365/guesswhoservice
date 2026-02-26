@@ -160,6 +160,11 @@ func (s *sessionService) StartSession(teamID string) (*domain.Session, error) {
 		return nil, fmt.Errorf("failed to update active session for team %s: %w", teamID, err)
 	}
 
+	// Publish a game update so SSE clients are notified of the new active session.
+	if err := s.dbStore.PublishGameUpdate(context.Background(), teamID, ""); err != nil {
+		log.Printf("Error publishing game update for session start (team %s): %v", teamID, err)
+	}
+
 	// M1: First Round Started — awarded once when a team starts their first session.
 	s.milestoneService.AwardIfAbsent(context.Background(), teamID, domain.MilestoneM1)
 
