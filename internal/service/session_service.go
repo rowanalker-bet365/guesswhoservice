@@ -4,22 +4,22 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
-	"log"
 	"time"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 	"github.com/guesswho/internal/db"
 	"github.com/guesswho/internal/domain"
+	"github.com/guesswho/internal/logging"
 )
 
 // SessionService manages game sessions
 type SessionService interface {
-	StartSession(teamID string) (*domain.Session, error)
-	GetSession(sessionID string) (*domain.Session, error)
-	AskQuestion(sessionID string, questionID string) (*domain.TraitAnswer, error)
-	SubmitGuess(sessionID string, candidateID string) (*domain.GuessResult, error)
-	Reveal(sessionID string) (*domain.RevealResult, error)
+	StartSession(ctx context.Context, teamID string) (*domain.Session, error)
+	GetSession(ctx context.Context, sessionID string) (*domain.Session, error)
+	AskQuestion(ctx context.Context, sessionID string, questionID string) (*domain.TraitAnswer, error)
+	SubmitGuess(ctx context.Context, sessionID string, candidateID string) (*domain.GuessResult, error)
+	Reveal(ctx context.Context, sessionID string) (*domain.RevealResult, error)
 }
 
 type sessionService struct {
@@ -77,7 +77,7 @@ func sessionShuffleSeed(sessionID string) int64 {
 	return int64(h.Sum64())
 }
 
-func (s *sessionService) StartSession(teamID string) (*domain.Session, error) {
+func (s *sessionService) StartSession(ctx context.Context, teamID string) (*domain.Session, error) {
 	sessionID := fmt.Sprintf("s_%s", uuid.New().String()[:8])
 
 	// Derive a unique seed from the session ID so that every session gets a
@@ -100,7 +100,7 @@ func (s *sessionService) StartSession(teamID string) (*domain.Session, error) {
 	}
 
 	// Retrieve team data to filter solved characters
-	teamData, err := s.dbStore.ReadTeamData(context.Background(), teamID)
+	teamData, err := s.dbStore.ReadTeamData(ctx, teamID)
 	if err != nil && err != redis.Nil {
 		return nil, fmt.Errorf("failed to read team data: %w", err)
 	}
@@ -143,40 +143,44 @@ func (s *sessionService) StartSession(teamID string) (*domain.Session, error) {
 	}
 
 	// Save session
-	if err := s.dbStore.WriteSession(context.Background(), session); err != nil {
+	if err := s.dbStore.WriteSession(ctx, session); err != nil {
 		return nil, fmt.Errorf("failed to save session: %w", err)
 	}
 
 	// If all characters were solved, clear the solved set in Redis so the team starts fresh.
 	if resetOccurred {
-		if err := s.dbStore.ClearSolvedCharacters(context.Background(), teamID); err != nil {
-			log.Printf("Warning: failed to clear solved characters for team %s: %v", teamID, err)
+		if err := s.dbStore.ClearSolvedCharacters(ctx, teamID); err != nil {
+			logging.Warn(ctx, "failed to clear solved characters", "error", err)
 		}
 	}
 
 	// Set the active session ID using a targeted HSET — do NOT use WriteTeamData here,
 	// as that would overwrite score/solves/solved-characters with the stale snapshot.
-	if err := s.dbStore.SetActiveSession(context.Background(), teamID, sessionID); err != nil {
+	if err := s.dbStore.SetActiveSession(ctx, teamID, sessionID); err != nil {
 		return nil, fmt.Errorf("failed to update active session for team %s: %w", teamID, err)
 	}
 
 	// Publish a game update so SSE clients are notified of the new active session.
-	if err := s.dbStore.PublishGameUpdate(context.Background(), teamID, ""); err != nil {
-		log.Printf("Error publishing game update for session start (team %s): %v", teamID, err)
+	if err := s.dbStore.PublishGameUpdate(ctx, teamID, ""); err != nil {
+		logging.Error(ctx, "failed to publish game update on session start", "error", err)
 	}
 
 	// M1: First Round Started — awarded once when a team starts their first session.
-	s.milestoneService.AwardIfAbsent(context.Background(), teamID, domain.MilestoneM1)
+	s.milestoneService.AwardIfAbsent(ctx, teamID, domain.MilestoneM1)
+
+	logging.Info(ctx, "session started", "sessionId", sessionID, "boardSize", len(availableCandidates), "targetCandidate", session.TargetCandidate.CandidateID)
 
 	return session, nil
 }
 
-func (s *sessionService) GetSession(sessionID string) (*domain.Session, error) {
-	return s.dbStore.ReadSession(context.Background(), sessionID)
+func (s *sessionService) GetSession(ctx context.Context, sessionID string) (*domain.Session, error) {
+	return s.dbStore.ReadSession(ctx, sessionID)
 }
 
-func (s *sessionService) AskQuestion(sessionID string, questionID string) (*domain.TraitAnswer, error) {
-	session, err := s.dbStore.ReadSession(context.Background(), sessionID)
+func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, questionID string) (*domain.TraitAnswer, error) {
+	logging.Debug(ctx, "processing question", "questionId", questionID)
+
+	session, err := s.dbStore.ReadSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +198,9 @@ func (s *sessionService) AskQuestion(sessionID string, questionID string) (*doma
 	// Check for chaos/failure injection
 	if s.chaosService.ShouldFail(session, traitDef) {
 		session.IncrementFailure("failed")
-		s.dbStore.WriteSession(context.Background(), session)
+		s.dbStore.WriteSession(ctx, session)
+
+		logging.Warn(ctx, "chaos: degraded response", "questionId", questionID)
 
 		return &domain.TraitAnswer{
 			QuestionID: questionID,
@@ -212,20 +218,20 @@ func (s *sessionService) AskQuestion(sessionID string, questionID string) (*doma
 
 	// Record the question
 	session.RecordQuestion(questionID)
-	s.dbStore.WriteSession(context.Background(), session)
+	s.dbStore.WriteSession(ctx, session)
 
 	// M2: First Successful Question — awarded after the first non-degraded answer.
-	s.milestoneService.AwardIfAbsent(context.Background(), session.TeamID, domain.MilestoneM2)
+	s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneM2)
 
 	// M3: Elimination Working — awarded when ≥ 3 questions have been asked in a session.
 	if session.GetQuestionsAskedCount() >= 3 {
-		s.milestoneService.AwardIfAbsent(context.Background(), session.TeamID, domain.MilestoneM3)
+		s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneM3)
 	}
 
 	// S3: Resilience — awarded when a successful answer is received for a flaky trait
 	// while the session is inside a chaos window. Chaos must be enabled for this to trigger.
 	if traitDef.IsFlaky && s.chaosService.IsInChaosWindow(session) {
-		s.milestoneService.AwardIfAbsent(context.Background(), session.TeamID, domain.MilestoneS3)
+		s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneS3)
 	}
 
 	// Build response
@@ -247,11 +253,13 @@ func (s *sessionService) AskQuestion(sessionID string, questionID string) (*doma
 		traitAnswer.Answer = answer
 	}
 
+	logging.Debug(ctx, "question answered", "questionId", questionID, "encrypted", traitDef.IsEncrypted)
+
 	return traitAnswer, nil
 }
 
-func (s *sessionService) SubmitGuess(sessionID string, candidateID string) (*domain.GuessResult, error) {
-	session, err := s.dbStore.ReadSession(context.Background(), sessionID)
+func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, candidateID string) (*domain.GuessResult, error) {
+	session, err := s.dbStore.ReadSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -299,16 +307,16 @@ func (s *sessionService) SubmitGuess(sessionID string, candidateID string) (*dom
 		session.MarkComplete(true)
 
 		// M4: First Correct Solve — awarded on the first correct guess.
-		s.milestoneService.AwardIfAbsent(context.Background(), session.TeamID, domain.MilestoneM4)
+		s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneM4)
 
 		// S1: Efficiency — awarded when a character is solved with ≤ 10 questions.
 		if session.GetQuestionsAskedCount() <= 10 {
-			s.milestoneService.AwardIfAbsent(context.Background(), session.TeamID, domain.MilestoneS1)
+			s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneS1)
 		}
 	} else {
 		// Wrong guess: apply -200 penalty immediately, regardless of whether the session ends.
-		if err := s.dbStore.IncrementTeamScore(context.Background(), session.TeamID, -200); err != nil {
-			log.Printf("Error applying wrong-guess penalty for team %s: %v", session.TeamID, err)
+		if err := s.dbStore.IncrementTeamScore(ctx, session.TeamID, -200); err != nil {
+			logging.Error(ctx, "failed to apply wrong-guess penalty", "error", err)
 		}
 		session.DecrementGuess()
 	}
@@ -321,7 +329,7 @@ func (s *sessionService) SubmitGuess(sessionID string, candidateID string) (*dom
 	}
 
 	// Persist updates
-	_ = s.dbStore.WriteSession(context.Background(), session)
+	_ = s.dbStore.WriteSession(ctx, session)
 
 	// Record on leaderboard only when the session actually ends
 	if session.Completed {
@@ -338,13 +346,13 @@ func (s *sessionService) SubmitGuess(sessionID string, candidateID string) (*dom
 		}
 
 		// Update team stats including solved characters and clearing active session
-		s.updateTeamStats(session, finalScore, finalCorrect, candidateID)
+		s.updateTeamStats(ctx, session, finalScore, finalCorrect, candidateID)
 
 		// S2: Automation — awarded once the team reaches 3+ total correct solves.
 		// Read the updated solve count after updateTeamStats has incremented it.
 		if finalCorrect {
-			if teamData, err := s.dbStore.ReadTeamData(context.Background(), session.TeamID); err == nil && teamData.Solves >= 3 {
-				s.milestoneService.AwardIfAbsent(context.Background(), session.TeamID, domain.MilestoneS2)
+			if teamData, err := s.dbStore.ReadTeamData(ctx, session.TeamID); err == nil && teamData.Solves >= 3 {
+				s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneS2)
 			}
 		}
 	}
@@ -352,15 +360,17 @@ func (s *sessionService) SubmitGuess(sessionID string, candidateID string) (*dom
 	// Publish an update now that all data is persisted, regardless of guess correctness.
 	if correct {
 		// For a correct guess, include the solved character ID.
-		if err := s.dbStore.PublishGameUpdate(context.Background(), session.TeamID, candidateID); err != nil {
-			log.Printf("Error publishing game update: %v", err)
+		if err := s.dbStore.PublishGameUpdate(ctx, session.TeamID, candidateID); err != nil {
+			logging.Error(ctx, "failed to publish game update", "error", err)
 		}
 	} else {
 		// For an incorrect guess, send a generic update to trigger a client refetch.
-		if err := s.dbStore.PublishGameUpdate(context.Background(), session.TeamID, ""); err != nil {
-			log.Printf("Error publishing game update: %v", err)
+		if err := s.dbStore.PublishGameUpdate(ctx, session.TeamID, ""); err != nil {
+			logging.Error(ctx, "failed to publish game update", "error", err)
 		}
 	}
+
+	logging.Info(ctx, "guess submitted", "candidateId", candidateID, "correct", correct, "score", totalScore, "guessesRemaining", session.GuessesRemaining)
 
 	// Build per-guess result
 	result := &domain.GuessResult{
@@ -377,8 +387,8 @@ func (s *sessionService) SubmitGuess(sessionID string, candidateID string) (*dom
 	return result, nil
 }
 
-func (s *sessionService) Reveal(sessionID string) (*domain.RevealResult, error) {
-	session, err := s.dbStore.ReadSession(context.Background(), sessionID)
+func (s *sessionService) Reveal(ctx context.Context, sessionID string) (*domain.RevealResult, error) {
+	session, err := s.dbStore.ReadSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -389,12 +399,14 @@ func (s *sessionService) Reveal(sessionID string) (*domain.RevealResult, error) 
 	// Preserve whether the session had a correct guess previously.
 	if !alreadyCompleted {
 		session.MarkComplete(session.CorrectGuess)
-		_ = s.dbStore.WriteSession(context.Background(), session)
+		_ = s.dbStore.WriteSession(ctx, session)
 
 		// Clear active session ID for the team using a targeted HSET to avoid
 		// clobbering concurrent Lua script updates to score/solves.
-		_ = s.dbStore.ClearActiveSession(context.Background(), session.TeamID)
+		_ = s.dbStore.ClearActiveSession(ctx, session.TeamID)
 	}
+
+	logging.Info(ctx, "session revealed", "wasCompleted", alreadyCompleted)
 
 	res := &domain.RevealResult{
 		Target: session.TargetCandidate,
@@ -408,27 +420,25 @@ func (s *sessionService) Reveal(sessionID string) (*domain.RevealResult, error) 
 	return res, nil
 }
 
-func (s *sessionService) updateTeamStats(session *domain.Session, score int, correct bool, solvedCandidateID string) {
-	ctx := context.Background()
-
+func (s *sessionService) updateTeamStats(ctx context.Context, session *domain.Session, score int, correct bool, solvedCandidateID string) {
 	if correct && solvedCandidateID != "" {
 		// Atomically update score, solves, solved-characters set, leaderboard, and masterboard
 		// in a single Lua script to prevent race conditions.
 		if err := s.dbStore.UpdateTeamStatsAtomic(ctx, session.TeamID, solvedCandidateID, score); err != nil {
-			log.Printf("Error in atomic team stats update for team %s: %v", session.TeamID, err)
+			logging.Error(ctx, "failed atomic team stats update", "error", err)
 			return
 		}
 
 		// Conditionally update fastest solve time (atomic compare-and-set via Lua).
 		elapsed := time.Duration(session.GetElapsedTime()) * time.Second
 		if err := s.dbStore.UpdateFastestSolve(ctx, session.TeamID, elapsed); err != nil {
-			log.Printf("Error updating fastest solve for team %s: %v", session.TeamID, err)
+			logging.Error(ctx, "failed to update fastest solve", "error", err)
 		}
 	}
 	// Wrong-guess penalties are applied immediately in SubmitGuess, not here.
 
 	// Clear the active session ID so the team can start a new session.
 	if err := s.dbStore.ClearActiveSession(ctx, session.TeamID); err != nil {
-		log.Printf("Error clearing active session for team %s: %v", session.TeamID, err)
+		logging.Error(ctx, "failed to clear active session", "error", err)
 	}
 }

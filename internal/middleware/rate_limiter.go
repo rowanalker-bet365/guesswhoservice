@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/guesswho/internal/logging"
 )
 
 // RateLimiter implements a simple token bucket rate limiter
@@ -39,6 +41,7 @@ func (rl *RateLimiter) Limit(capacity, refillRate int) func(http.Handler) http.H
 
 			teamID := r.Header.Get("X-Team-Id")
 			if teamID == "" {
+				logging.Warn(r.Context(), "rate limit check failed - missing X-Team-Id")
 				http.Error(w, "X-Team-Id header required", http.StatusBadRequest)
 				return
 			}
@@ -46,6 +49,7 @@ func (rl *RateLimiter) Limit(capacity, refillRate int) func(http.Handler) http.H
 			key := teamID + ":" + r.URL.Path
 
 			if !rl.allow(key, capacity, refillRate) {
+				logging.Warn(r.Context(), "rate limit exceeded", "teamId", teamID, "path", r.URL.Path)
 				http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 				return
 			}
