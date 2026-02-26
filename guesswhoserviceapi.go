@@ -116,6 +116,7 @@ func main() {
 	sessionService := service.NewSessionService(
 		dbStore,
 		traitCatalog,
+		characterCatalog,
 		boardGenerator,
 		encryptionService,
 		chaosService,
