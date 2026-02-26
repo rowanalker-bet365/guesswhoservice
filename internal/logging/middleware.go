@@ -12,7 +12,7 @@ import (
 	"github.com/google/uuid"
 )
 
-var sessionIDPattern = regexp.MustCompile(`sessions/([^/]+)`)
+var sessionIDPattern = regexp.MustCompile(`sessions/(s_[^/]+)`)
 
 // HTTPMiddleware returns HTTP middleware that creates a request-scoped logger
 // with trace, request ID, and other contextual fields, and logs request

@@ -33,7 +33,7 @@ func Load() *Config {
 		ServiceURL:           getEnv("GUESSWHOSERVICE_URL", ""),
 		JWTSecret:            getEnv("JWT_SECRET", "a-very-secret-key"),
 		DebugAPIKey:          os.Getenv("DEBUG_API_KEY"),
-		LogLevel:             getEnv("LOG_LEVEL", "info"),
+		LogLevel:             getEnv("LOG_LEVEL", "warn"),
 		GCPProjectID:         getEnv("GCP_PROJECT_ID", "verificationguesswho"),
 	}
 }

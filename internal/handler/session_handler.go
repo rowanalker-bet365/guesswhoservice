@@ -48,8 +48,6 @@ func (h *SessionHandler) StartSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logging.Info(r.Context(), "session started", "sessionId", session.SessionID)
-
 	response := StartSessionResponse{
 		SessionID:       session.SessionID,
 		BoardSize:       session.BoardSize,
@@ -68,7 +66,7 @@ func (h *SessionHandler) GetBoard(w http.ResponseWriter, r *http.Request) {
 
 	session, err := h.sessionService.GetSession(r.Context(), sessionID)
 	if err != nil {
-		logging.Warn(r.Context(), "session not found for board request", "sessionId", sessionID, "error", err)
+		logging.Warn(r.Context(), "session not found for board request", "error", err)
 		http.Error(w, "Session not found", http.StatusNotFound)
 		return
 	}
@@ -101,7 +99,7 @@ func (h *SessionHandler) GetBoard(w http.ResponseWriter, r *http.Request) {
 		"traitDefinitions": defs,
 	}
 
-	logging.Debug(r.Context(), "board retrieved", "sessionId", sessionID, "boardSize", len(session.Candidates))
+	logging.Debug(r.Context(), "board retrieved", "boardSize", len(session.Candidates))
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
@@ -125,12 +123,12 @@ func (h *SessionHandler) AskQuestion(w http.ResponseWriter, r *http.Request) {
 
 	answer, err := h.sessionService.AskQuestion(r.Context(), sessionID, req.QuestionID)
 	if err != nil {
-		logging.Error(r.Context(), "ask question failed", "sessionId", sessionID, "questionId", req.QuestionID, "error", err)
+		logging.Error(r.Context(), "ask question failed", "questionId", req.QuestionID, "error", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	logging.Info(r.Context(), "question answered", "sessionId", sessionID, "questionId", req.QuestionID)
+	logging.Info(r.Context(), "question answered", "questionId", req.QuestionID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(answer)
@@ -155,7 +153,7 @@ func (h *SessionHandler) SubmitGuess(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.sessionService.SubmitGuess(r.Context(), sessionID, req.CandidateID)
 	if err != nil {
-		logging.Error(r.Context(), "submit guess failed", "sessionId", sessionID, "candidateId", req.CandidateID, "error", err)
+		logging.Error(r.Context(), "submit guess failed", "candidateId", req.CandidateID, "error", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -163,7 +161,7 @@ func (h *SessionHandler) SubmitGuess(w http.ResponseWriter, r *http.Request) {
 	// Fetch session for additional fields
 	session, err := h.sessionService.GetSession(r.Context(), sessionID)
 	if err != nil {
-		logging.Error(r.Context(), "session not found after guess", "sessionId", sessionID, "error", err)
+		logging.Error(r.Context(), "session not found after guess", "error", err)
 		http.Error(w, "Session not found", http.StatusNotFound)
 		return
 	}
@@ -171,7 +169,7 @@ func (h *SessionHandler) SubmitGuess(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	if result.Correct {
-		logging.Info(r.Context(), "correct guess", "sessionId", sessionID, "score", result.Score)
+		logging.Info(r.Context(), "correct guess", "score", result.Score)
 		response := map[string]interface{}{
 			"correct":          true,
 			"questionsAsked":   session.GetQuestionsAskedCount(),
@@ -185,7 +183,7 @@ func (h *SessionHandler) SubmitGuess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logging.Info(r.Context(), "incorrect guess", "sessionId", sessionID, "guessesRemaining", session.GuessesRemaining)
+	logging.Info(r.Context(), "incorrect guess", "guessesRemaining", session.GuessesRemaining)
 
 	// Failure response with dynamic session state
 	response := map[string]interface{}{
@@ -204,7 +202,7 @@ func (h *SessionHandler) Status(w http.ResponseWriter, r *http.Request) {
 
 	session, err := h.sessionService.GetSession(r.Context(), sessionID)
 	if err != nil {
-		logging.Warn(r.Context(), "session not found for status", "sessionId", sessionID, "error", err)
+		logging.Warn(r.Context(), "session not found for status", "error", err)
 		http.Error(w, "Session not found", http.StatusNotFound)
 		return
 	}
@@ -228,12 +226,12 @@ func (h *SessionHandler) Reveal(w http.ResponseWriter, r *http.Request) {
 
 	res, err := h.sessionService.Reveal(r.Context(), sessionID)
 	if err != nil {
-		logging.Error(r.Context(), "reveal failed", "sessionId", sessionID, "error", err)
+		logging.Error(r.Context(), "reveal failed", "error", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	logging.Info(r.Context(), "session revealed", "sessionId", sessionID)
+	logging.Info(r.Context(), "session revealed")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(res)

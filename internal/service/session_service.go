@@ -150,7 +150,7 @@ func (s *sessionService) StartSession(ctx context.Context, teamID string) (*doma
 	// If all characters were solved, clear the solved set in Redis so the team starts fresh.
 	if resetOccurred {
 		if err := s.dbStore.ClearSolvedCharacters(ctx, teamID); err != nil {
-			logging.Warn(ctx, "failed to clear solved characters", "teamId", teamID, "error", err)
+			logging.Warn(ctx, "failed to clear solved characters", "error", err)
 		}
 	}
 
@@ -162,13 +162,13 @@ func (s *sessionService) StartSession(ctx context.Context, teamID string) (*doma
 
 	// Publish a game update so SSE clients are notified of the new active session.
 	if err := s.dbStore.PublishGameUpdate(ctx, teamID, ""); err != nil {
-		logging.Error(ctx, "failed to publish game update on session start", "teamId", teamID, "error", err)
+		logging.Error(ctx, "failed to publish game update on session start", "error", err)
 	}
 
 	// M1: First Round Started — awarded once when a team starts their first session.
 	s.milestoneService.AwardIfAbsent(ctx, teamID, domain.MilestoneM1)
 
-	logging.Info(ctx, "session started", "sessionId", sessionID, "teamId", teamID, "boardSize", len(availableCandidates), "targetCandidate", session.TargetCandidate.CandidateID)
+	logging.Info(ctx, "session started", "sessionId", sessionID, "boardSize", len(availableCandidates), "targetCandidate", session.TargetCandidate.CandidateID)
 
 	return session, nil
 }
@@ -178,7 +178,7 @@ func (s *sessionService) GetSession(ctx context.Context, sessionID string) (*dom
 }
 
 func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, questionID string) (*domain.TraitAnswer, error) {
-	logging.Debug(ctx, "processing question", "sessionId", sessionID, "questionId", questionID)
+	logging.Debug(ctx, "processing question", "questionId", questionID)
 
 	session, err := s.dbStore.ReadSession(ctx, sessionID)
 	if err != nil {
@@ -200,7 +200,7 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 		session.IncrementFailure("failed")
 		s.dbStore.WriteSession(ctx, session)
 
-		logging.Warn(ctx, "chaos: degraded response", "sessionId", sessionID, "questionId", questionID)
+		logging.Warn(ctx, "chaos: degraded response", "questionId", questionID)
 
 		return &domain.TraitAnswer{
 			QuestionID: questionID,
@@ -253,7 +253,7 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 		traitAnswer.Answer = answer
 	}
 
-	logging.Debug(ctx, "question answered", "sessionId", sessionID, "questionId", questionID, "encrypted", traitDef.IsEncrypted)
+	logging.Debug(ctx, "question answered", "questionId", questionID, "encrypted", traitDef.IsEncrypted)
 
 	return traitAnswer, nil
 }
@@ -316,7 +316,7 @@ func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, cand
 	} else {
 		// Wrong guess: apply -200 penalty immediately, regardless of whether the session ends.
 		if err := s.dbStore.IncrementTeamScore(ctx, session.TeamID, -200); err != nil {
-			logging.Error(ctx, "failed to apply wrong-guess penalty", "teamId", session.TeamID, "error", err)
+			logging.Error(ctx, "failed to apply wrong-guess penalty", "error", err)
 		}
 		session.DecrementGuess()
 	}
@@ -361,16 +361,16 @@ func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, cand
 	if correct {
 		// For a correct guess, include the solved character ID.
 		if err := s.dbStore.PublishGameUpdate(ctx, session.TeamID, candidateID); err != nil {
-			logging.Error(ctx, "failed to publish game update", "teamId", session.TeamID, "sessionId", sessionID, "error", err)
+			logging.Error(ctx, "failed to publish game update", "error", err)
 		}
 	} else {
 		// For an incorrect guess, send a generic update to trigger a client refetch.
 		if err := s.dbStore.PublishGameUpdate(ctx, session.TeamID, ""); err != nil {
-			logging.Error(ctx, "failed to publish game update", "teamId", session.TeamID, "sessionId", sessionID, "error", err)
+			logging.Error(ctx, "failed to publish game update", "error", err)
 		}
 	}
 
-	logging.Info(ctx, "guess submitted", "sessionId", sessionID, "candidateId", candidateID, "correct", correct, "score", totalScore, "guessesRemaining", session.GuessesRemaining)
+	logging.Info(ctx, "guess submitted", "candidateId", candidateID, "correct", correct, "score", totalScore, "guessesRemaining", session.GuessesRemaining)
 
 	// Build per-guess result
 	result := &domain.GuessResult{
@@ -406,7 +406,7 @@ func (s *sessionService) Reveal(ctx context.Context, sessionID string) (*domain.
 		_ = s.dbStore.ClearActiveSession(ctx, session.TeamID)
 	}
 
-	logging.Info(ctx, "session revealed", "sessionId", sessionID, "wasCompleted", alreadyCompleted)
+	logging.Info(ctx, "session revealed", "wasCompleted", alreadyCompleted)
 
 	res := &domain.RevealResult{
 		Target: session.TargetCandidate,
@@ -425,20 +425,20 @@ func (s *sessionService) updateTeamStats(ctx context.Context, session *domain.Se
 		// Atomically update score, solves, solved-characters set, leaderboard, and masterboard
 		// in a single Lua script to prevent race conditions.
 		if err := s.dbStore.UpdateTeamStatsAtomic(ctx, session.TeamID, solvedCandidateID, score); err != nil {
-			logging.Error(ctx, "failed atomic team stats update", "teamId", session.TeamID, "error", err)
+			logging.Error(ctx, "failed atomic team stats update", "error", err)
 			return
 		}
 
 		// Conditionally update fastest solve time (atomic compare-and-set via Lua).
 		elapsed := time.Duration(session.GetElapsedTime()) * time.Second
 		if err := s.dbStore.UpdateFastestSolve(ctx, session.TeamID, elapsed); err != nil {
-			logging.Error(ctx, "failed to update fastest solve", "teamId", session.TeamID, "error", err)
+			logging.Error(ctx, "failed to update fastest solve", "error", err)
 		}
 	}
 	// Wrong-guess penalties are applied immediately in SubmitGuess, not here.
 
 	// Clear the active session ID so the team can start a new session.
 	if err := s.dbStore.ClearActiveSession(ctx, session.TeamID); err != nil {
-		logging.Error(ctx, "failed to clear active session", "teamId", session.TeamID, "error", err)
+		logging.Error(ctx, "failed to clear active session", "error", err)
 	}
 }

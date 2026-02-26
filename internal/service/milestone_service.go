@@ -34,18 +34,18 @@ func (m *milestoneService) AwardIfAbsent(ctx context.Context, teamID string, mil
 	// Look up the score bonus for this milestone.
 	scoreBonus, ok := domain.MilestoneScoreMap[milestone]
 	if !ok {
-		logging.Warn(ctx, "unknown milestone", "milestone", milestone, "teamId", teamID)
+		logging.Warn(ctx, "unknown milestone", "milestone", milestone)
 		return false
 	}
 
 	// Read current team data to inspect the existing milestones list.
 	teamData, err := m.store.ReadTeamData(ctx, teamID)
 	if err != nil && err != redis.Nil {
-		logging.Error(ctx, "failed to read team data for milestone check", "teamId", teamID, "error", err)
+		logging.Error(ctx, "failed to read team data for milestone check", "error", err)
 		return false
 	}
 	if teamData == nil {
-		logging.Warn(ctx, "no team data found for milestone", "teamId", teamID, "milestone", milestone)
+		logging.Warn(ctx, "no team data found for milestone", "milestone", milestone)
 		return false
 	}
 
@@ -60,7 +60,7 @@ func (m *milestoneService) AwardIfAbsent(ctx context.Context, teamID string, mil
 	// Append and persist the updated milestones list.
 	updatedMilestones := append(teamData.Milestones, milestoneStr)
 	if err := m.store.SetMilestones(ctx, teamID, updatedMilestones); err != nil {
-		logging.Error(ctx, "failed to persist milestone", "milestone", milestone, "teamId", teamID, "error", err)
+		logging.Error(ctx, "failed to persist milestone", "milestone", milestone, "error", err)
 		return false
 	}
 
@@ -69,10 +69,10 @@ func (m *milestoneService) AwardIfAbsent(ctx context.Context, teamID string, mil
 	if err := m.store.IncrementTeamScore(ctx, teamID, scoreBonus); err != nil {
 		// The milestone record was already written above; log the score failure
 		// but return true so callers know the milestone was recorded.
-		logging.Error(ctx, "milestone recorded but score increment failed", "milestone", milestone, "teamId", teamID, "error", err)
+		logging.Error(ctx, "milestone recorded but score increment failed", "milestone", milestone, "error", err)
 		return true
 	}
 
-	logging.Info(ctx, "milestone awarded", "milestone", milestone, "scoreBonus", scoreBonus, "teamId", teamID)
+	logging.Info(ctx, "milestone awarded", "milestone", milestone, "scoreBonus", scoreBonus)
 	return true
 }
