@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"os"
 	"time"
@@ -11,6 +10,7 @@ import (
 	"github.com/guesswho/config"
 	"github.com/guesswho/internal/db"
 	"github.com/guesswho/internal/handler"
+	"github.com/guesswho/internal/logging"
 	custommiddleware "github.com/guesswho/internal/middleware"
 	"github.com/guesswho/internal/service"
 )
@@ -22,27 +22,6 @@ func chain(h http.Handler, m ...Middleware) http.Handler {
 		h = m[i](h)
 	}
 	return h
-}
-
-func loggingMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		next.ServeHTTP(w, r)
-		dur := time.Since(start)
-		log.Printf("%s %s %s", r.Method, r.URL.Path, dur)
-	})
-}
-
-func recoverMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			if rec := recover(); rec != nil {
-				log.Printf("panic recovered: %v", rec)
-				http.Error(w, "internal server error", http.StatusInternalServerError)
-			}
-		}()
-		next.ServeHTTP(w, r)
-	})
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
@@ -68,6 +47,10 @@ func main() {
 	// Load configuration
 	cfg := config.Load()
 
+	// Initialize structured logging
+	logging.Init(cfg.LogLevel, cfg.GCPProjectID)
+	logger := logging.NewLogger("startup")
+
 	// Initialize Redis client
 	redisClient := redis.NewClient(&redis.Options{
 		Addr:     cfg.RedisAddr,
@@ -79,10 +62,10 @@ func main() {
 	pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer pingCancel()
 	if _, err := redisClient.Ping(pingCtx).Result(); err != nil {
-		log.Printf("Failed to connect to Redis at %s. Error: %v", cfg.RedisAddr, err)
-		log.Fatalf("Exiting due to Redis connection failure.")
+		logger.Error("failed to connect to Redis", "addr", cfg.RedisAddr, "error", err)
+		os.Exit(1)
 	}
-	log.Println("✅ Successfully connected to Redis")
+	logger.Info("connected to Redis", "addr", cfg.RedisAddr)
 
 	// Initialize repositories
 	dbStore := db.NewStore(redisClient)
@@ -93,9 +76,10 @@ func main() {
 	// Load Character Catalog
 	characterCatalog, err := service.NewCharacterCatalogService("data/characters.json")
 	if err != nil {
-		log.Fatalf("Failed to load character catalog: %v", err)
+		logger.Error("failed to load character catalog", "error", err)
+		os.Exit(1)
 	}
-	log.Printf("✅ Successfully loaded %d characters", len(characterCatalog.GetAllCharacters()))
+	logger.Info("character catalog loaded", "count", len(characterCatalog.GetAllCharacters()))
 
 	// Initialize Masterboard using a fresh background context (not the ping timeout context).
 	var charIDs []string
@@ -103,9 +87,10 @@ func main() {
 		charIDs = append(charIDs, char.CandidateID)
 	}
 	if err := dbStore.InitializeMasterboard(context.Background(), charIDs); err != nil {
-		log.Fatalf("Failed to initialize masterboard: %v", err)
+		logger.Error("failed to initialize masterboard", "error", err)
+		os.Exit(1)
 	}
-	log.Println("✅ Masterboard initialized (or already exists)")
+	logger.Info("masterboard initialized")
 
 	boardGenerator := service.NewBoardGeneratorService()
 	encryptionService := service.NewEncryptionService()
@@ -211,8 +196,7 @@ func main() {
 	handlerStack := chain(
 		mux,
 		corsMiddleware,
-		recoverMiddleware,
-		loggingMiddleware,
+		logging.HTTPMiddleware,
 		timeoutMiddleware(60*time.Second),
 	)
 
@@ -222,15 +206,16 @@ func main() {
 		port = "8080" // A default for local running
 	}
 
-	log.Printf("🚀 Starting Guess Who API server, listening on port %s", port)
-	log.Printf("⚙️  Configuration:")
-	log.Printf("   - Rate Limiting: %v", cfg.RateLimitEnabled)
-	log.Printf("   - Chaos Mode: %v", cfg.ChaosEnabled)
-	if cfg.ChaosEnabled {
-		log.Printf("   - Chaos Interval: %ds", cfg.ChaosIntervalSeconds)
-		log.Printf("   - Chaos Window: %ds", cfg.ChaosWindowSeconds)
-	}
-	log.Printf("📖 API documentation available at http://localhost:%s/", port)
+	logger.Info("starting server", "port", port)
+	logger.Info("configuration loaded",
+		"rateLimitEnabled", cfg.RateLimitEnabled,
+		"chaosEnabled", cfg.ChaosEnabled,
+		"chaosInterval", cfg.ChaosIntervalSeconds,
+		"chaosWindow", cfg.ChaosWindowSeconds,
+	)
 
-	log.Fatal(http.ListenAndServe(":"+port, handlerStack))
+	if err := http.ListenAndServe(":"+port, handlerStack); err != nil {
+		logger.Error("server failed to start", "error", err)
+		os.Exit(1)
+	}
 }

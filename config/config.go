@@ -17,6 +17,8 @@ type Config struct {
 	ServiceURL           string
 	JWTSecret            string
 	DebugAPIKey          string
+	LogLevel             string
+	GCPProjectID         string
 }
 
 // Load loads configuration from environment variables
@@ -31,6 +33,8 @@ func Load() *Config {
 		ServiceURL:           getEnv("GUESSWHOSERVICE_URL", ""),
 		JWTSecret:            getEnv("JWT_SECRET", "a-very-secret-key"),
 		DebugAPIKey:          os.Getenv("DEBUG_API_KEY"),
+		LogLevel:             getEnv("LOG_LEVEL", "info"),
+		GCPProjectID:         getEnv("GCP_PROJECT_ID", "verificationguesswho"),
 	}
 }
 
