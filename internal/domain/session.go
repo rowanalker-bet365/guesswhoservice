@@ -21,41 +21,41 @@ type ChaosProfile struct {
 
 // Session represents a game session
 type Session struct {
-	SessionID        string            `json:"sessionId"`
-	TeamID           string            `json:"teamId"`
-	BoardSize        int               `json:"boardSize"`
-	TraitsAvailable  int               `json:"traitsAvailable"`
-	GuessLimit       int               `json:"guessLimit"`
-	ChaosProfile     ChaosProfile      `json:"chaosProfile"`
-	Candidates       []*Candidate      `json:"-"`
-	TargetCandidate  *Candidate        `json:"-"`
-	Seed             int64             `json:"-"`
-	CreatedAt        time.Time         `json:"-"`
-	QuestionsAsked   []string          `json:"-"`
-	FailedRequests   int               `json:"-"`
-	Timeouts         int               `json:"-"`
-	Unhandled5xx     int               `json:"-"`
-	GuessesRemaining int               `json:"-"`
-	Completed        bool              `json:"-"`
-	CorrectGuess     bool              `json:"-"`
-	GuessedCandidates map[string]bool  `json:"-"`
+	SessionID         string          `json:"sessionId"`
+	TeamID            string          `json:"teamId"`
+	BoardSize         int             `json:"boardSize"`
+	TraitsAvailable   int             `json:"traitsAvailable"`
+	GuessLimit        int             `json:"guessLimit"`
+	ChaosProfile      ChaosProfile    `json:"chaosProfile"`
+	Candidates        []*Candidate    `json:"candidates"`
+	TargetCandidate   *Candidate      `json:"targetCandidate"`
+	Seed              int64           `json:"seed"`
+	CreatedAt         time.Time       `json:"createdAt"`
+	QuestionsAsked    []string        `json:"questionsAsked"`
+	FailedRequests    int             `json:"failedRequests"`
+	Timeouts          int             `json:"timeouts"`
+	Unhandled5xx      int             `json:"unhandled5xx"`
+	GuessesRemaining  int             `json:"guessesRemaining"`
+	Completed         bool            `json:"completed"`
+	CorrectGuess      bool            `json:"correctGuess"`
+	GuessedCandidates map[string]bool `json:"guessedCandidates"`
 }
 
 // NewSession creates a new game session
 func NewSession(sessionID, teamID string, boardSize, guessLimit int, seed int64, chaos ChaosProfile) *Session {
 	return &Session{
-		SessionID:        sessionID,
-		TeamID:           teamID,
-		BoardSize:        boardSize,
-		TraitsAvailable:  64,
-		GuessLimit:       guessLimit,
-		ChaosProfile:     chaos,
-		Seed:             seed,
-		CreatedAt:        time.Now(),
-		QuestionsAsked:   make([]string, 0),
-		GuessesRemaining: guessLimit,
-		Completed:        false,
-		CorrectGuess:     false,
+		SessionID:         sessionID,
+		TeamID:            teamID,
+		BoardSize:         boardSize,
+		TraitsAvailable:   64,
+		GuessLimit:        guessLimit,
+		ChaosProfile:      chaos,
+		Seed:              seed,
+		CreatedAt:         time.Now(),
+		QuestionsAsked:    make([]string, 0),
+		GuessesRemaining:  guessLimit,
+		Completed:         false,
+		CorrectGuess:      false,
 		GuessedCandidates: make(map[string]bool),
 	}
 }
