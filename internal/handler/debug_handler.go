@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/guesswho/internal/db"
+	"github.com/guesswho/internal/logging"
 )
 
 // DebugHandler handles debug endpoints for development-time Redis inspection.
@@ -23,6 +24,7 @@ func NewDebugHandler(store *db.Store, apiKey string) *DebugHandler {
 // Returns false and writes the appropriate error response if the check fails.
 func (h *DebugHandler) authorize(w http.ResponseWriter, r *http.Request) bool {
 	if h.apiKey == "" {
+		logging.Warn(r.Context(), "debug endpoint accessed but not configured")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(map[string]string{"error": "debug endpoints are not configured"})
@@ -30,6 +32,7 @@ func (h *DebugHandler) authorize(w http.ResponseWriter, r *http.Request) bool {
 	}
 	provided := r.Header.Get("X-Debug-Key")
 	if subtle.ConstantTimeCompare([]byte(provided), []byte(h.apiKey)) != 1 {
+		logging.Warn(r.Context(), "unauthorized debug access attempt")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
@@ -48,12 +51,14 @@ func (h *DebugHandler) GetTeamDebug(w http.ResponseWriter, r *http.Request) {
 	}
 	teamID := r.PathValue("teamId")
 	if teamID == "" {
+		logging.Warn(r.Context(), "missing teamId for debug")
 		http.Error(w, "teamId path parameter required", http.StatusBadRequest)
 		return
 	}
 
 	team, err := h.store.ReadTeamData(r.Context(), teamID)
 	if err != nil {
+		logging.Warn(r.Context(), "team not found for debug", "teamId", teamID, "error", err)
 		http.Error(w, "Team not found: "+err.Error(), http.StatusNotFound)
 		return
 	}
@@ -82,6 +87,8 @@ func (h *DebugHandler) GetTeamDebug(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	logging.Info(r.Context(), "debug data retrieved", "teamId", teamID)
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
 }
@@ -97,9 +104,11 @@ func (h *DebugHandler) FlushAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.FlushAll(r.Context()); err != nil {
+		logging.Error(r.Context(), "failed to flush Redis", "error", err)
 		http.Error(w, "failed to flush redis: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	logging.Warn(r.Context(), "Redis flushed - all data deleted")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{

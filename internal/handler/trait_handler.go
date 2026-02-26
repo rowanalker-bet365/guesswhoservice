@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/guesswho/internal/domain"
+	"github.com/guesswho/internal/logging"
 	"github.com/guesswho/internal/middleware"
 	"github.com/guesswho/internal/service"
 )
@@ -45,6 +46,8 @@ func (h *TraitHandler) GetQuestions(w http.ResponseWriter, r *http.Request) {
 		"questions": questions,
 	}
 
+	logging.Debug(r.Context(), "questions retrieved", "count", len(traits))
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
@@ -63,15 +66,19 @@ type DecodeResponse struct {
 func (h *TraitHandler) Decode(w http.ResponseWriter, r *http.Request) {
 	var req DecodeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		logging.Warn(r.Context(), "invalid decode request body", "error", err)
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
 	plaintext, err := h.encryptionService.Decrypt(req.Encrypted)
 	if err != nil {
+		logging.Warn(r.Context(), "decode failed", "error", err)
 		http.Error(w, "Failed to decode: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	logging.Debug(r.Context(), "decode successful")
 
 	// M5: Encrypted Answer Handled — awarded once when a team successfully decodes
 	// an encrypted trait answer. The teamID is extracted from the JWT context.

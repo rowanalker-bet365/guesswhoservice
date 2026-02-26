@@ -2,11 +2,11 @@ package service
 
 import (
 	"context"
-	"log"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/guesswho/internal/db"
 	"github.com/guesswho/internal/domain"
+	"github.com/guesswho/internal/logging"
 )
 
 // MilestoneService handles milestone checking and awarding.
@@ -34,18 +34,18 @@ func (m *milestoneService) AwardIfAbsent(ctx context.Context, teamID string, mil
 	// Look up the score bonus for this milestone.
 	scoreBonus, ok := domain.MilestoneScoreMap[milestone]
 	if !ok {
-		log.Printf("[milestone] Unknown milestone %q for team %s — skipping", milestone, teamID)
+		logging.Warn(ctx, "unknown milestone", "milestone", milestone)
 		return false
 	}
 
 	// Read current team data to inspect the existing milestones list.
 	teamData, err := m.store.ReadTeamData(ctx, teamID)
 	if err != nil && err != redis.Nil {
-		log.Printf("[milestone] Error reading team data for team %s: %v", teamID, err)
+		logging.Error(ctx, "failed to read team data for milestone check", "error", err)
 		return false
 	}
 	if teamData == nil {
-		log.Printf("[milestone] No team data found for team %s — skipping milestone %s", teamID, milestone)
+		logging.Warn(ctx, "no team data found for milestone", "milestone", milestone)
 		return false
 	}
 
@@ -60,7 +60,7 @@ func (m *milestoneService) AwardIfAbsent(ctx context.Context, teamID string, mil
 	// Append and persist the updated milestones list.
 	updatedMilestones := append(teamData.Milestones, milestoneStr)
 	if err := m.store.SetMilestones(ctx, teamID, updatedMilestones); err != nil {
-		log.Printf("[milestone] Error persisting milestone %s for team %s: %v", milestone, teamID, err)
+		logging.Error(ctx, "failed to persist milestone", "milestone", milestone, "error", err)
 		return false
 	}
 
@@ -69,10 +69,10 @@ func (m *milestoneService) AwardIfAbsent(ctx context.Context, teamID string, mil
 	if err := m.store.IncrementTeamScore(ctx, teamID, scoreBonus); err != nil {
 		// The milestone record was already written above; log the score failure
 		// but return true so callers know the milestone was recorded.
-		log.Printf("[milestone] Milestone %s recorded for team %s but score increment failed: %v", milestone, teamID, err)
+		logging.Error(ctx, "milestone recorded but score increment failed", "milestone", milestone, "error", err)
 		return true
 	}
 
-	log.Printf("[milestone] ✅ Awarded %s (+%d pts) to team %s", milestone, scoreBonus, teamID)
+	logging.Info(ctx, "milestone awarded", "milestone", milestone, "scoreBonus", scoreBonus)
 	return true
 }

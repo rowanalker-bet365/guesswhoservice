@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/guesswho/internal/db"
 	"github.com/guesswho/internal/domain"
+	"github.com/guesswho/internal/logging"
 	"github.com/guesswho/internal/middleware"
 	"github.com/guesswho/internal/service"
 )
@@ -101,6 +102,7 @@ func NewClientHandler(store *db.Store, encryptionService service.EncryptionServi
 func (h *ClientHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 	var req SignupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		logging.Warn(r.Context(), "invalid signup request body", "error", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -108,6 +110,7 @@ func (h *ClientHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 	// Check if team name already exists
 	_, err := h.store.GetTeamIDByName(r.Context(), req.TeamName)
 	if err == nil {
+		logging.Warn(r.Context(), "signup attempt with existing team name", "teamName", req.TeamName)
 		http.Error(w, "Team name already exists", http.StatusConflict)
 		return
 	}
@@ -115,6 +118,7 @@ func (h *ClientHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 	teamID := "team-" + uuid.New().String()
 	hashedPassword, err := h.encryptionService.HashPassword(req.Password)
 	if err != nil {
+		logging.Error(r.Context(), "failed to hash password", "error", err)
 		http.Error(w, "Failed to hash password", http.StatusInternalServerError)
 		return
 	}
@@ -127,9 +131,12 @@ func (h *ClientHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.store.WriteTeamData(r.Context(), teamID, newTeam); err != nil {
+		logging.Error(r.Context(), "failed to save team", "teamId", teamID, "error", err)
 		http.Error(w, "Failed to save team", http.StatusInternalServerError)
 		return
 	}
+
+	logging.Info(r.Context(), "team created", "teamId", teamID, "teamName", req.TeamName)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -140,23 +147,27 @@ func (h *ClientHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 func (h *ClientHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		logging.Warn(r.Context(), "invalid login request body", "error", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	teamID, err := h.store.GetTeamIDByName(r.Context(), req.TeamName)
 	if err != nil {
+		logging.Warn(r.Context(), "login attempt for unknown team", "teamName", req.TeamName)
 		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 		return
 	}
 
 	team, err := h.store.ReadTeamData(r.Context(), teamID)
 	if err != nil {
+		logging.Warn(r.Context(), "login attempt for unknown team", "teamName", req.TeamName)
 		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 		return
 	}
 
 	if !h.encryptionService.CheckPasswordHash(req.Password, team.PasswordHash) {
+		logging.Warn(r.Context(), "login failed - invalid password", "teamName", req.TeamName)
 		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 		return
 	}
@@ -173,9 +184,12 @@ func (h *ClientHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	// Generate encoded token and send it as response.
 	signedToken, err := token.SignedString([]byte(h.jwtSecret))
 	if err != nil {
+		logging.Error(r.Context(), "failed to sign JWT", "teamId", teamID, "error", err)
 		http.Error(w, "Failed to sign token", http.StatusInternalServerError)
 		return
 	}
+
+	logging.Info(r.Context(), "team logged in", "teamId", teamID, "teamName", req.TeamName)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -198,12 +212,14 @@ func (h *ClientHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
 func (h *ClientHandler) GetTeamProgressHandler(w http.ResponseWriter, r *http.Request) {
 	teamID, ok := r.Context().Value(middleware.TeamIDKey).(string)
 	if !ok {
+		logging.Warn(r.Context(), "team ID not found in token")
 		http.Error(w, "Team ID not found in token", http.StatusUnauthorized)
 		return
 	}
 
 	team, err := h.store.ReadTeamData(r.Context(), teamID)
 	if err != nil {
+		logging.Warn(r.Context(), "team not found for progress", "teamId", teamID, "error", err)
 		http.Error(w, "Team not found", http.StatusNotFound)
 		return
 	}
@@ -248,6 +264,8 @@ func (h *ClientHandler) GetTeamProgressHandler(w http.ResponseWriter, r *http.Re
 		resp.SolvedCharacters = []string{}
 	}
 
+	logging.Debug(r.Context(), "team progress retrieved", "teamId", teamID)
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(resp)
@@ -257,12 +275,14 @@ func (h *ClientHandler) GetTeamProgressHandler(w http.ResponseWriter, r *http.Re
 func (h *ClientHandler) ResetTeamHandler(w http.ResponseWriter, r *http.Request) {
 	teamID, ok := r.Context().Value(middleware.TeamIDKey).(string)
 	if !ok {
+		logging.Warn(r.Context(), "team ID not found in token for reset")
 		http.Error(w, "Team ID not found in token", http.StatusUnauthorized)
 		return
 	}
 
 	team, err := h.store.ReadTeamData(r.Context(), teamID)
 	if err != nil {
+		logging.Warn(r.Context(), "team not found for reset", "teamId", teamID, "error", err)
 		http.Error(w, "Team not found", http.StatusNotFound)
 		return
 	}
@@ -272,9 +292,12 @@ func (h *ClientHandler) ResetTeamHandler(w http.ResponseWriter, r *http.Request)
 	team.ActiveSessionID = ""
 
 	if err := h.store.WriteTeamData(r.Context(), teamID, team); err != nil {
+		logging.Error(r.Context(), "failed to reset team progress", "teamId", teamID, "error", err)
 		http.Error(w, "Failed to reset team progress", http.StatusInternalServerError)
 		return
 	}
+
+	logging.Info(r.Context(), "team progress reset", "teamId", teamID)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -287,6 +310,7 @@ func (h *ClientHandler) ResetTeamHandler(w http.ResponseWriter, r *http.Request)
 func (h *ClientHandler) GetLeaderboard(w http.ResponseWriter, r *http.Request) {
 	entries, err := h.store.GetLeaderboardEntries(r.Context())
 	if err != nil {
+		logging.Error(r.Context(), "failed to get leaderboard", "error", err)
 		http.Error(w, "Failed to get leaderboard", http.StatusInternalServerError)
 		return
 	}
@@ -307,6 +331,7 @@ func (h *ClientHandler) GetMasterBoardHandler(w http.ResponseWriter, r *http.Req
 	// then pipelines SMEMBERS "masterboard:<id>" for each character.
 	masterboardData, err := h.store.GetMasterboardFromSets(r.Context())
 	if err != nil {
+		logging.Error(r.Context(), "failed to get masterboard data", "error", err)
 		http.Error(w, "Failed to get masterboard data", http.StatusInternalServerError)
 		return
 	}
@@ -328,6 +353,7 @@ func (h *ClientHandler) GetMasterBoardHandler(w http.ResponseWriter, r *http.Req
 	teamColors, err := h.store.GetTeamColors(r.Context(), uniqueTeamIDs)
 	if err != nil {
 		// Non-fatal: fall back to default colors rather than failing the whole request.
+		logging.Warn(r.Context(), "failed to get team colors, using defaults", "error", err)
 		teamColors = map[string]string{}
 	}
 
