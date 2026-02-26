@@ -42,11 +42,11 @@ type Session struct {
 }
 
 // NewSession creates a new game session
-func NewSession(sessionID, teamID string, boardSize, guessLimit int, seed int64, chaos ChaosProfile) *Session {
+func NewSession(sessionID, teamID string, guessLimit int, seed int64, chaos ChaosProfile) *Session {
 	return &Session{
 		SessionID:         sessionID,
 		TeamID:            teamID,
-		BoardSize:         boardSize,
+		BoardSize:         64,
 		TraitsAvailable:   64,
 		GuessLimit:        guessLimit,
 		ChaosProfile:      chaos,

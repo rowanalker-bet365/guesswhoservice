@@ -22,12 +22,6 @@ func NewSessionHandler(sessionService service.SessionService, traitCatalog servi
 	}
 }
 
-// StartSessionRequest represents the request to start a new session
-type StartSessionRequest struct {
-	BoardSize  int    `json:"boardSize"`
-	Difficulty string `json:"difficulty"`
-}
-
 // StartSessionResponse represents the response when starting a session
 type StartSessionResponse struct {
 	SessionID       string      `json:"sessionId"`
@@ -45,13 +39,7 @@ func (h *SessionHandler) StartSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req StartSessionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	session, err := h.sessionService.StartSession(teamID, req.BoardSize, req.Difficulty)
+	session, err := h.sessionService.StartSession(teamID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -87,15 +75,23 @@ func (h *SessionHandler) GetBoard(w http.ResponseWriter, r *http.Request) {
 			"traitKey": td.TraitKey,
 			"type":     td.Type,
 		}
-		if td.Values != nil && len(td.Values) > 0 {
+		if len(td.Values) > 0 {
 			def["values"] = td.Values
 		}
 		defs = append(defs, def)
 	}
 
+	// Build the board: return only the trait map for each position in the
+	// session's stored shuffled order. Never expose candidateId, name, or
+	// imagePath to the client.
+	board := make([]map[string]interface{}, 0, len(session.Candidates))
+	for _, c := range session.Candidates {
+		board = append(board, c.Traits)
+	}
+
 	response := map[string]interface{}{
 		"sessionId":        session.SessionID,
-		"candidates":       session.Candidates,
+		"board":            board,
 		"traitDefinitions": defs,
 	}
 
@@ -176,7 +172,7 @@ func (h *SessionHandler) SubmitGuess(w http.ResponseWriter, r *http.Request) {
 	// Failure response with dynamic session state
 	response := map[string]interface{}{
 		"correct":          false,
-		"penalty":          -500,
+		"penalty":          -200,
 		"sessionEnded":     session.Completed,
 		"guessesRemaining": session.GuessesRemaining,
 		"guessedCount":     session.GetGuessedCount(),

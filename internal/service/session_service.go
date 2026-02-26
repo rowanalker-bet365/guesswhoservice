@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log"
-	"math/rand"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -16,7 +15,7 @@ import (
 
 // SessionService manages game sessions
 type SessionService interface {
-	StartSession(teamID string, boardSize int, difficulty string) (*domain.Session, error)
+	StartSession(teamID string) (*domain.Session, error)
 	GetSession(sessionID string) (*domain.Session, error)
 	AskQuestion(sessionID string, questionID string) (*domain.TraitAnswer, error)
 	SubmitGuess(sessionID string, candidateID string) (*domain.GuessResult, error)
@@ -26,6 +25,7 @@ type SessionService interface {
 type sessionService struct {
 	dbStore           *db.Store
 	traitCatalog      TraitCatalogService
+	characterCatalog  CharacterCatalogService
 	boardGenerator    BoardGeneratorService
 	encryptionService EncryptionService
 	chaosService      ChaosService
@@ -47,6 +47,7 @@ type SessionServiceConfig struct {
 func NewSessionService(
 	dbStore *db.Store,
 	traitCatalog TraitCatalogService,
+	characterCatalog CharacterCatalogService,
 	boardGenerator BoardGeneratorService,
 	encryptionService EncryptionService,
 	chaosService ChaosService,
@@ -57,6 +58,7 @@ func NewSessionService(
 	return &sessionService{
 		dbStore:           dbStore,
 		traitCatalog:      traitCatalog,
+		characterCatalog:  characterCatalog,
 		boardGenerator:    boardGenerator,
 		encryptionService: encryptionService,
 		chaosService:      chaosService,
@@ -68,12 +70,6 @@ func NewSessionService(
 	}
 }
 
-// stableSeed returns a fixed seed so all sessions share the same board and target.
-func stableSeed() int64 {
-	// Adjust this constant if you want to rotate the global board.
-	return 13371337
-}
-
 // sessionShuffleSeed derives a deterministic per-session seed from the sessionID.
 func sessionShuffleSeed(sessionID string) int64 {
 	h := fnv.New64a()
@@ -81,13 +77,12 @@ func sessionShuffleSeed(sessionID string) int64 {
 	return int64(h.Sum64())
 }
 
-func (s *sessionService) StartSession(teamID string, boardSize int, difficulty string) (*domain.Session, error) {
-	if boardSize <= 0 {
-		boardSize = 64
-	}
-
+func (s *sessionService) StartSession(teamID string) (*domain.Session, error) {
 	sessionID := fmt.Sprintf("s_%s", uuid.New().String()[:8])
-	seed := stableSeed()
+
+	// Derive a unique seed from the session ID so that every session gets a
+	// different board order and target character.
+	perSessionSeed := sessionShuffleSeed(sessionID)
 
 	chaosProfile := domain.ChaosProfile{
 		Mode:            domain.ChaosModeScheduled,
@@ -95,10 +90,11 @@ func (s *sessionService) StartSession(teamID string, boardSize int, difficulty s
 		IntervalSeconds: s.chaosInterval,
 	}
 
-	session := domain.NewSession(sessionID, teamID, boardSize, 3, seed, chaosProfile)
+	session := domain.NewSession(sessionID, teamID, 3, perSessionSeed, chaosProfile)
 
-	// Generate board
-	candidates, err := s.boardGenerator.GenerateBoard(seed, boardSize, s.traitCatalog)
+	// Generate board: load all characters from the catalog and shuffle them
+	// using the per-session seed so every session has a unique board order.
+	candidates, err := s.boardGenerator.GenerateBoard(perSessionSeed, s.characterCatalog)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate board: %w", err)
 	}
@@ -134,16 +130,13 @@ func (s *sessionService) StartSession(teamID string, boardSize int, difficulty s
 		availableCandidates = candidates
 	}
 
+	// GenerateBoard already shuffled the candidates with perSessionSeed, so
+	// session.Candidates is already in a unique per-session order.
 	session.Candidates = availableCandidates
-	session.TargetCandidate = s.boardGenerator.SelectTarget(availableCandidates, seed)
 
-	// Shuffle candidate presentation order per session while keeping the same board and target.
-	{
-		rng := rand.New(rand.NewSource(sessionShuffleSeed(sessionID)))
-		rng.Shuffle(len(session.Candidates), func(i, j int) {
-			session.Candidates[i], session.Candidates[j] = session.Candidates[j], session.Candidates[i]
-		})
-	}
+	// Select a random target using the per-session seed (SelectTarget uses
+	// seed+1000 internally so it does not collide with the board shuffle).
+	session.TargetCandidate = s.boardGenerator.SelectTarget(availableCandidates, perSessionSeed)
 
 	if session.TargetCandidate == nil {
 		return nil, fmt.Errorf("failed to select target candidate")
