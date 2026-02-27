@@ -134,6 +134,18 @@ func (s *sessionService) StartSession(ctx context.Context, teamID string) (*doma
 	// session.Candidates is already in a unique per-session order.
 	session.Candidates = availableCandidates
 
+	// Generate per-session fake ID mapping for anti-cheat.
+	// Fake IDs (P01, P02, ...) correspond to the shuffled board positions.
+	candidateIDMap := make(map[string]string, len(availableCandidates))
+	candidateIDMapRev := make(map[string]string, len(availableCandidates))
+	for i, c := range availableCandidates {
+		fakeID := fmt.Sprintf("P%02d", i+1)
+		candidateIDMap[fakeID] = c.CandidateID
+		candidateIDMapRev[c.CandidateID] = fakeID
+	}
+	session.CandidateIDMap = candidateIDMap
+	session.CandidateIDMapRev = candidateIDMapRev
+
 	// Select a random target using the per-session seed (SelectTarget uses
 	// seed+1000 internally so it does not collide with the board shuffle).
 	session.TargetCandidate = s.boardGenerator.SelectTarget(availableCandidates, perSessionSeed)
@@ -273,8 +285,25 @@ func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, cand
 		return nil, fmt.Errorf("no guesses remaining")
 	}
 
+	// Resolve fake candidate ID to real ID
+	realCandidateID, exists := session.CandidateIDMap[candidateID]
+	if !exists {
+		// Backward compatibility: check if it's a raw real ID
+		for _, c := range session.Candidates {
+			if c.CandidateID == candidateID {
+				realCandidateID = candidateID
+				exists = true
+				logging.Warn(ctx, "DEPRECATED: guess submitted with real candidate ID", "candidateId", candidateID)
+				break
+			}
+		}
+	}
+	if !exists {
+		return nil, fmt.Errorf("invalid candidate ID: %s", candidateID)
+	}
+
 	// Check if guess is correct
-	correct := session.TargetCandidate.CandidateID == candidateID
+	correct := session.TargetCandidate.CandidateID == realCandidateID
 
 	// Calculate per-guess score
 	var breakdown domain.ScoreBreakdown
@@ -300,7 +329,7 @@ func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, cand
 	// Update session state
 	//  - Track unique candidates guessed
 	//  - Only decrement failed guesses on wrong guesses
-	session.RecordGuess(candidateID)
+	session.RecordGuess(realCandidateID)
 	if correct {
 		session.CorrectGuess = true
 		// Mark session as complete immediately on correct guess
@@ -342,7 +371,7 @@ func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, cand
 		}
 
 		// Update team stats including solved characters and clearing active session
-		s.updateTeamStats(ctx, session, finalScore, finalCorrect, candidateID)
+		s.updateTeamStats(ctx, session, finalScore, finalCorrect, realCandidateID)
 
 		// S2: Automation — awarded once the team reaches 3+ total correct solves.
 		// Read the updated solve count after updateTeamStats has incremented it.
@@ -356,7 +385,7 @@ func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, cand
 	// Publish an update now that all data is persisted, regardless of guess correctness.
 	if correct {
 		// For a correct guess, include the solved character ID.
-		if err := s.dbStore.PublishGameUpdate(ctx, session.TeamID, candidateID); err != nil {
+		if err := s.dbStore.PublishGameUpdate(ctx, session.TeamID, realCandidateID); err != nil {
 			logging.Error(ctx, "failed to publish game update", "error", err)
 		}
 	} else {
@@ -366,7 +395,7 @@ func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, cand
 		}
 	}
 
-	logging.Info(ctx, "guess submitted", "candidateId", candidateID, "correct", correct, "score", totalScore, "guessesRemaining", session.GuessesRemaining)
+	logging.Info(ctx, "guess submitted", "fakeId", candidateID, "realId", realCandidateID, "correct", correct, "score", totalScore, "guessesRemaining", session.GuessesRemaining)
 
 	// Build per-guess result
 	result := &domain.GuessResult{

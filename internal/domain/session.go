@@ -38,7 +38,9 @@ type Session struct {
 	GuessesRemaining  int             `json:"guessesRemaining"`
 	Completed         bool            `json:"completed"`
 	CorrectGuess      bool            `json:"correctGuess"`
-	GuessedCandidates map[string]bool `json:"guessedCandidates"`
+	GuessedCandidates  map[string]bool   `json:"guessedCandidates"`
+	CandidateIDMap     map[string]string `json:"candidateIdMap"`     // fakeID -> realID
+	CandidateIDMapRev  map[string]string `json:"candidateIdMapRev"`  // realID -> fakeID
 }
 
 // NewSession creates a new game session

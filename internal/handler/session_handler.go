@@ -85,12 +85,18 @@ func (h *SessionHandler) GetBoard(w http.ResponseWriter, r *http.Request) {
 		defs = append(defs, def)
 	}
 
-	// Build the board: return only the trait map for each position in the
-	// session's stored shuffled order. Never expose candidateId, name, or
-	// imagePath to the client.
+	// Build the board: return the trait map for each position in the
+	// session's stored shuffled order, including the per-session fake
+	// candidateId. Never expose the real candidateId, name, or imagePath.
 	board := make([]map[string]interface{}, 0, len(session.Candidates))
 	for _, c := range session.Candidates {
-		board = append(board, c.Traits)
+		entry := map[string]interface{}{
+			"traits": c.Traits,
+		}
+		if fakeID, ok := session.CandidateIDMapRev[c.CandidateID]; ok {
+			entry["candidateId"] = fakeID
+		}
+		board = append(board, entry)
 	}
 
 	response := map[string]interface{}{
