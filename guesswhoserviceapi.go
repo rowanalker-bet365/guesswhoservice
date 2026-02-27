@@ -28,7 +28,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Team-Id, X-Api-Key, Authorization")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Team-Id, X-Api-Key, X-Key-Id, Authorization")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -94,7 +94,7 @@ func main() {
 
 	boardGenerator := service.NewBoardGeneratorService()
 	encryptionService := service.NewEncryptionService()
-	chaosService := service.NewChaosService(cfg.ChaosEnabled)
+	chaosService := service.NewChaosService(cfg.ChaosEnabled, cfg.ChaosWindowSeconds, cfg.ChaosIntervalSeconds)
 	scoringService := service.NewScoringService()
 	milestoneService := service.NewMilestoneService(dbStore)
 
@@ -108,7 +108,6 @@ func main() {
 		scoringService,
 		milestoneService,
 		service.SessionServiceConfig{
-			ChaosEnabled:  cfg.ChaosEnabled,
 			ChaosInterval: cfg.ChaosIntervalSeconds,
 			ChaosWindow:   cfg.ChaosWindowSeconds,
 		},
@@ -116,10 +115,11 @@ func main() {
 
 	// Initialize handlers
 	sessionHandler := handler.NewSessionHandler(sessionService, traitCatalog)
-	traitHandler := handler.NewTraitHandler(traitCatalog, encryptionService, milestoneService)
+	traitHandler := handler.NewTraitHandler(traitCatalog, encryptionService, milestoneService, sessionService)
 	clientHandler := handler.NewClientHandler(dbStore, encryptionService, characterCatalog, cfg.JWTSecret)
 	debugAPIKey := cfg.DebugAPIKey
 	debugHandler := handler.NewDebugHandler(dbStore, debugAPIKey)
+	chaosHandler := handler.NewChaosHandler(chaosService, cfg.ChaosAPIKey)
 
 	// Initialize middleware
 	rateLimiter := custommiddleware.NewRateLimiter(cfg.RateLimitEnabled)
@@ -162,6 +162,10 @@ func main() {
 	// Debug routes
 	mux.HandleFunc("GET /debug/team/{teamId}", debugHandler.GetTeamDebug)
 	mux.HandleFunc("POST /debug/flush", debugHandler.FlushAll)
+
+	// Chaos trigger routes
+	mux.HandleFunc("POST /chaos/trigger", chaosHandler.TriggerChaos)
+	mux.HandleFunc("GET /chaos/status", chaosHandler.GetChaosStatus)
 
 	// Health check endpoint
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {

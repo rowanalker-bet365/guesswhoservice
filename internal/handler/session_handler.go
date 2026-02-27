@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -37,14 +38,21 @@ func (h *SessionHandler) StartSession(w http.ResponseWriter, r *http.Request) {
 	teamID := r.Header.Get("X-Team-Id")
 	if teamID == "" {
 		logging.Warn(r.Context(), "missing X-Team-Id header")
-		http.Error(w, "X-Team-Id header required", http.StatusBadRequest)
+		writeErrorJSON(w, http.StatusBadRequest, APIError{
+			Error:   "missing_header",
+			Message: "The X-Team-Id header is required to start a session. Include your team ID in the request header: X-Team-Id: your-team-id",
+			Field:   "X-Team-Id",
+		})
 		return
 	}
 
 	session, err := h.sessionService.StartSession(r.Context(), teamID)
 	if err != nil {
 		logging.Error(r.Context(), "failed to start session", "error", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeErrorJSON(w, http.StatusInternalServerError, APIError{
+			Error:   "session_creation_failed",
+			Message: "The server was unable to create a new session. Please retry your request. If the problem persists, contact the event organiser.",
+		})
 		return
 	}
 
@@ -67,7 +75,11 @@ func (h *SessionHandler) GetBoard(w http.ResponseWriter, r *http.Request) {
 	session, err := h.sessionService.GetSession(r.Context(), sessionID)
 	if err != nil {
 		logging.Warn(r.Context(), "session not found for board request", "error", err)
-		http.Error(w, "Session not found", http.StatusNotFound)
+		writeErrorJSON(w, http.StatusNotFound, APIError{
+			Error:     "session_not_found",
+			Message:   "No session exists with ID '" + sessionID + "'. The session may have expired or the ID is incorrect. Start a new session with POST /sessions/start.",
+			SessionID: sessionID,
+		})
 		return
 	}
 
@@ -123,14 +135,28 @@ func (h *SessionHandler) AskQuestion(w http.ResponseWriter, r *http.Request) {
 	var req AskQuestionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		logging.Warn(r.Context(), "invalid request body for ask", "error", err)
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		writeErrorJSON(w, http.StatusBadRequest, APIError{
+			Error:   "invalid_request_body",
+			Message: "The request body could not be parsed as JSON. Expected format: {\"questionId\": \"T01\"}. Ensure Content-Type is application/json.",
+		})
 		return
 	}
 
 	answer, err := h.sessionService.AskQuestion(r.Context(), sessionID, req.QuestionID)
 	if err != nil {
+		// Check for chaos-injected error first
+		var chaosErr *service.ChaosError
+		if errors.As(err, &chaosErr) {
+			logging.Warn(r.Context(), "chaos: injected failure on ask", "questionId", req.QuestionID)
+			writeErrorJSON(w, chaosErr.StatusCode, APIError{
+				Error:   chaosErr.ErrorCode,
+				Message: chaosErr.Message,
+			})
+			return
+		}
 		logging.Error(r.Context(), "ask question failed", "questionId", req.QuestionID, "error", err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		statusCode, apiErr := classifyServiceError(err, sessionID, req.QuestionID)
+		writeErrorJSON(w, statusCode, apiErr)
 		return
 	}
 
@@ -153,14 +179,27 @@ func (h *SessionHandler) SubmitGuess(w http.ResponseWriter, r *http.Request) {
 	var req GuessRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		logging.Warn(r.Context(), "invalid request body for guess", "error", err)
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		writeErrorJSON(w, http.StatusBadRequest, APIError{
+			Error:   "invalid_request_body",
+			Message: "The request body could not be parsed as JSON. Expected format: {\"candidateId\": \"P01\"}. Ensure Content-Type is application/json.",
+		})
 		return
 	}
 
 	result, err := h.sessionService.SubmitGuess(r.Context(), sessionID, req.CandidateID)
 	if err != nil {
+		var chaosErr *service.ChaosError
+		if errors.As(err, &chaosErr) {
+			logging.Warn(r.Context(), "chaos: injected failure on guess", "candidateId", req.CandidateID)
+			writeErrorJSON(w, chaosErr.StatusCode, APIError{
+				Error:   chaosErr.ErrorCode,
+				Message: chaosErr.Message,
+			})
+			return
+		}
 		logging.Error(r.Context(), "submit guess failed", "candidateId", req.CandidateID, "error", err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		statusCode, apiErr := classifyServiceError(err, sessionID, req.CandidateID)
+		writeErrorJSON(w, statusCode, apiErr)
 		return
 	}
 
@@ -168,7 +207,11 @@ func (h *SessionHandler) SubmitGuess(w http.ResponseWriter, r *http.Request) {
 	session, err := h.sessionService.GetSession(r.Context(), sessionID)
 	if err != nil {
 		logging.Error(r.Context(), "session not found after guess", "error", err)
-		http.Error(w, "Session not found", http.StatusNotFound)
+		writeErrorJSON(w, http.StatusInternalServerError, APIError{
+			Error:     "internal_error",
+			Message:   "The session could not be retrieved after processing your guess. This is an internal error. Please retry.",
+			SessionID: sessionID,
+		})
 		return
 	}
 
@@ -209,7 +252,11 @@ func (h *SessionHandler) Status(w http.ResponseWriter, r *http.Request) {
 	session, err := h.sessionService.GetSession(r.Context(), sessionID)
 	if err != nil {
 		logging.Warn(r.Context(), "session not found for status", "error", err)
-		http.Error(w, "Session not found", http.StatusNotFound)
+		writeErrorJSON(w, http.StatusNotFound, APIError{
+			Error:     "session_not_found",
+			Message:   "No session exists with ID '" + sessionID + "'. The session may have expired or the ID is incorrect. Start a new session with POST /sessions/start.",
+			SessionID: sessionID,
+		})
 		return
 	}
 
@@ -232,8 +279,18 @@ func (h *SessionHandler) Reveal(w http.ResponseWriter, r *http.Request) {
 
 	res, err := h.sessionService.Reveal(r.Context(), sessionID)
 	if err != nil {
+		var chaosErr *service.ChaosError
+		if errors.As(err, &chaosErr) {
+			logging.Warn(r.Context(), "chaos: injected failure on reveal")
+			writeErrorJSON(w, chaosErr.StatusCode, APIError{
+				Error:   chaosErr.ErrorCode,
+				Message: chaosErr.Message,
+			})
+			return
+		}
 		logging.Error(r.Context(), "reveal failed", "error", err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		statusCode, apiErr := classifyServiceError(err, sessionID)
+		writeErrorJSON(w, statusCode, apiErr)
 		return
 	}
 

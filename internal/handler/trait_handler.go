@@ -15,14 +15,16 @@ type TraitHandler struct {
 	traitCatalog      service.TraitCatalogService
 	encryptionService service.EncryptionService
 	milestoneService  service.MilestoneService
+	sessionService    service.SessionService
 }
 
 // NewTraitHandler creates a new trait handler
-func NewTraitHandler(traitCatalog service.TraitCatalogService, encryptionService service.EncryptionService, milestoneService service.MilestoneService) *TraitHandler {
+func NewTraitHandler(traitCatalog service.TraitCatalogService, encryptionService service.EncryptionService, milestoneService service.MilestoneService, sessionService service.SessionService) *TraitHandler {
 	return &TraitHandler{
 		traitCatalog:      traitCatalog,
 		encryptionService: encryptionService,
 		milestoneService:  milestoneService,
+		sessionService:    sessionService,
 	}
 }
 
@@ -36,8 +38,6 @@ func (h *TraitHandler) GetQuestions(w http.ResponseWriter, r *http.Request) {
 			"questionId": trait.QuestionID,
 			"traitKey":   trait.TraitKey,
 			"type":       trait.Type,
-			"cost":       trait.Cost,
-			"tier":       trait.Tier,
 		}
 		questions = append(questions, question)
 	}
@@ -52,42 +52,49 @@ func (h *TraitHandler) GetQuestions(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-// DecodeRequest represents a request to decode an encrypted answer
+// DecodeRequest represents a request to get cipher information for a session
 type DecodeRequest struct {
 	Encrypted string `json:"encrypted"`
 }
 
-// DecodeResponse represents the response from decoding
+// DecodeResponse represents the cipher hint response for client-side decryption
 type DecodeResponse struct {
-	Decrypted string `json:"decrypted"`
+	Cipher   string `json:"cipher"`
+	Key      string `json:"key"`
+	Encoding string `json:"encoding"`
+	Hint     string `json:"hint"`
 }
 
 // Decode handles POST /sessions/{sessionId}/decode
+// It returns the session's cipher and key so the client can decrypt answers locally.
 func (h *TraitHandler) Decode(w http.ResponseWriter, r *http.Request) {
-	var req DecodeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		logging.Warn(r.Context(), "invalid decode request body", "error", err)
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	sessionID := r.PathValue("sessionId")
+	if sessionID == "" {
+		http.Error(w, "Missing sessionId", http.StatusBadRequest)
 		return
 	}
 
-	plaintext, err := h.encryptionService.Decrypt(req.Encrypted)
+	session, err := h.sessionService.GetSession(r.Context(), sessionID)
 	if err != nil {
-		logging.Warn(r.Context(), "decode failed", "error", err)
-		http.Error(w, "Failed to decode: "+err.Error(), http.StatusBadRequest)
+		logging.Warn(r.Context(), "decode: session not found", "sessionId", sessionID, "error", err)
+		http.Error(w, "Session not found", http.StatusNotFound)
 		return
 	}
 
-	logging.Debug(r.Context(), "decode successful")
+	hint := h.encryptionService.GetCipherInfo(session.EncryptCipher, session.EncryptKey)
 
-	// M5: Encrypted Answer Handled — awarded once when a team successfully decodes
-	// an encrypted trait answer. The teamID is extracted from the JWT context.
+	// M5: Encrypted Answer Handled — awarded once when a team successfully calls decode.
 	if teamID, ok := r.Context().Value(middleware.TeamIDKey).(string); ok && teamID != "" {
 		h.milestoneService.AwardIfAbsent(r.Context(), teamID, domain.MilestoneM5)
 	}
 
+	logging.Debug(r.Context(), "decode info returned", "sessionId", sessionID, "cipher", session.EncryptCipher)
+
 	response := DecodeResponse{
-		Decrypted: plaintext,
+		Cipher:   hint.Cipher,
+		Key:      hint.Key,
+		Encoding: hint.Encoding,
+		Hint:     hint.Hint,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

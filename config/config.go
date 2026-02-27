@@ -17,6 +17,7 @@ type Config struct {
 	ServiceURL           string
 	JWTSecret            string
 	DebugAPIKey          string
+	ChaosAPIKey          string
 	LogLevel             string
 	GCPProjectID         string
 }
@@ -33,6 +34,7 @@ func Load() *Config {
 		ServiceURL:           getEnv("GUESSWHOSERVICE_URL", ""),
 		JWTSecret:            getEnv("JWT_SECRET", "a-very-secret-key"),
 		DebugAPIKey:          os.Getenv("DEBUG_API_KEY"),
+		ChaosAPIKey:          os.Getenv("CHAOS_API_KEY"),
 		LogLevel:             getEnv("LOG_LEVEL", "warn"),
 		GCPProjectID:         getEnv("GCP_PROJECT_ID", "verificationguesswho"),
 	}
