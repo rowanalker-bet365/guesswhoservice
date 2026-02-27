@@ -119,7 +119,7 @@ func main() {
 	clientHandler := handler.NewClientHandler(dbStore, encryptionService, characterCatalog, cfg.JWTSecret)
 	debugAPIKey := cfg.DebugAPIKey
 	debugHandler := handler.NewDebugHandler(dbStore, debugAPIKey)
-	chaosHandler := handler.NewChaosHandler(chaosService, cfg.ChaosAPIKey)
+	chaosHandler := handler.NewChaosHandler(chaosService, debugAPIKey)
 
 	// Initialize middleware
 	rateLimiter := custommiddleware.NewRateLimiter(cfg.RateLimitEnabled)
