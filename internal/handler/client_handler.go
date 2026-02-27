@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -391,6 +392,13 @@ func (h *ClientHandler) GetMasterBoardHandler(w http.ResponseWriter, r *http.Req
 			SolvedByTeams: solvedByTeams,
 		})
 	}
+
+	// Sort by character ID to guarantee a stable order across polls.
+	// Go map iteration is non-deterministic; without sorting, the characters
+	// would appear at different grid positions on every refresh.
+	sort.Slice(finalCharacters, func(i, j int) bool {
+		return finalCharacters[i].ID < finalCharacters[j].ID
+	})
 
 	response := MasterBoardResponse{
 		Characters: finalCharacters,

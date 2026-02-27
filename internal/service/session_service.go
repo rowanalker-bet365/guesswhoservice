@@ -426,7 +426,7 @@ func (s *sessionService) updateTeamStats(ctx context.Context, session *domain.Se
 		logging.Info(ctx, fmt.Sprintf("[MASTERBOARD] Atomic update succeeded: team=%s char=%s", session.TeamID, solvedCandidateID))
 
 		// Conditionally update fastest solve time (atomic compare-and-set via Lua).
-		elapsed := time.Duration(session.GetElapsedTime()) * time.Second
+		elapsed := time.Since(session.CreatedAt)
 		if err := s.dbStore.UpdateFastestSolve(ctx, session.TeamID, elapsed); err != nil {
 			logging.Error(ctx, "failed to update fastest solve", "error", err)
 		}
