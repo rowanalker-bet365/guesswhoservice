@@ -47,7 +47,7 @@ return 1
 // ARGV[1] = new elapsed nanoseconds (integer string)
 var updateFastestSolveScript = redis.NewScript(`
 local cur = redis.call('HGET', KEYS[1], 'fastest_solve_ns')
-if cur == false or cur == '' or tonumber(ARGV[1]) < tonumber(cur) then
+if cur == false or cur == '' or tonumber(cur) == 0 or tonumber(ARGV[1]) < tonumber(cur) then
     redis.call('HSET', KEYS[1], 'fastest_solve_ns', ARGV[1])
     return 1
 end
@@ -395,13 +395,14 @@ func (s *Store) GetTeamColors(ctx context.Context, teamIDs []string) (map[string
 	return result, nil
 }
 
-// GetMasterboardFromSets reads the masterboard using an inverted-mapping strategy that is
-// resilient to masterboard:<id> SET flushes. It:
+// GetMasterboardFromSets reads the masterboard by reading directly from the
+// per-character "masterboard:<charID>" SETs that are populated atomically by the
+// Lua script on each correct solve. This is the authoritative source of truth for
+// which teams have solved which characters, and is not affected by team resets.
+//
 //  1. Reads all character IDs from the "masterboard" HASH (full character list, including unsolved).
-//  2. Reads all team IDs from the "all_team_ids" SET.
-//  3. Pipelines SMEMBERS team:<teamID>:solved_characters for every team.
-//  4. Builds an inverted map characterID -> []teamID from those results.
-//  5. Returns the inverted map, defaulting to an empty slice for unsolved characters.
+//  2. Pipelines SMEMBERS masterboard:<charID> for every character.
+//  3. Returns the map characterID -> []teamID, defaulting to an empty slice for unsolved characters.
 func (s *Store) GetMasterboardFromSets(ctx context.Context) (map[string][]string, error) {
 	// Step 1: Get all character IDs registered at startup.
 	charIDs, err := s.client.HKeys(ctx, "masterboard").Result()
@@ -413,39 +414,29 @@ func (s *Store) GetMasterboardFromSets(ctx context.Context) (map[string][]string
 		return map[string][]string{}, nil
 	}
 
-	// Step 2: Get all team IDs.
-	teamIDs, err := s.client.SMembers(ctx, "all_team_ids").Result()
-	if err != nil && err != redis.Nil {
-		return nil, err
-	}
-
 	// Initialise result with empty slices for every character.
 	result := make(map[string][]string, len(charIDs))
 	for _, id := range charIDs {
 		result[id] = []string{}
 	}
 
-	if len(teamIDs) == 0 {
-		return result, nil
-	}
-
-	// Step 3: Pipeline SMEMBERS team:<teamID>:solved_characters for every team.
+	// Step 2: Pipeline SMEMBERS masterboard:<charID> for every character.
+	// These sets are written atomically by the Lua script on each correct solve
+	// and are never cleared when a team resets their progress.
 	pipe := s.client.Pipeline()
-	solvedCmds := make([]*redis.StringSliceCmd, len(teamIDs))
-	for i, teamID := range teamIDs {
-		solvedCmds[i] = pipe.SMembers(ctx, "team:"+teamID+":solved_characters")
+	solvedCmds := make([]*redis.StringSliceCmd, len(charIDs))
+	for i, charID := range charIDs {
+		solvedCmds[i] = pipe.SMembers(ctx, "masterboard:"+charID)
 	}
 	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
 		return nil, err
 	}
 
-	// Step 4: Build inverted map characterID -> []teamID.
-	for i, teamID := range teamIDs {
-		solved, _ := solvedCmds[i].Result()
-		for _, charID := range solved {
-			if _, known := result[charID]; known {
-				result[charID] = append(result[charID], teamID)
-			}
+	// Step 3: Build map characterID -> []teamID.
+	for i, charID := range charIDs {
+		teams, _ := solvedCmds[i].Result()
+		if len(teams) > 0 {
+			result[charID] = teams
 		}
 	}
 
