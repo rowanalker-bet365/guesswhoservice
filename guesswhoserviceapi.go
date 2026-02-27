@@ -28,7 +28,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Team-Id, X-Api-Key, X-Key-Id, Authorization")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Team-Id, X-Api-Key, X-Key-Id, X-Debug-Key, Authorization")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -118,7 +118,7 @@ func main() {
 	traitHandler := handler.NewTraitHandler(traitCatalog, encryptionService, milestoneService, sessionService)
 	clientHandler := handler.NewClientHandler(dbStore, encryptionService, characterCatalog, cfg.JWTSecret)
 	debugAPIKey := cfg.DebugAPIKey
-	debugHandler := handler.NewDebugHandler(dbStore, debugAPIKey)
+	debugHandler := handler.NewDebugHandler(dbStore, debugAPIKey, encryptionService)
 	chaosHandler := handler.NewChaosHandler(chaosService, debugAPIKey)
 
 	// Initialize middleware
@@ -162,6 +162,7 @@ func main() {
 	// Debug routes
 	mux.HandleFunc("GET /debug/team/{teamId}", debugHandler.GetTeamDebug)
 	mux.HandleFunc("POST /debug/flush", debugHandler.FlushAll)
+	mux.HandleFunc("POST /debug/decrypt", debugHandler.DecryptHandler)
 
 	// Chaos trigger routes
 	mux.HandleFunc("POST /chaos/trigger", chaosHandler.TriggerChaos)

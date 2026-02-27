@@ -115,3 +115,53 @@ func TestEncryptionService_GetCipherInfo(t *testing.T) {
 		assert.Equal(t, "hex", info.Encoding)
 	})
 }
+
+func TestEncryptionService_Decrypt(t *testing.T) {
+	svc := NewEncryptionService()
+
+	ciphers := []struct {
+		name      string
+		plaintext string
+		keyHex    string
+	}{
+		{"base64", "Hello, World!", ""},
+		{"hex", "Hello, World!", ""},
+		{"reverse", "Hello, World!", ""},
+		{"caesar", "Hello, World!", testKey},
+		{"xor", "Hello, World!", testKey},
+		{"vigenere", "Hello, World!", testKey},
+		{"xor-base64", "Hello, World!", testKey},
+	}
+
+	for _, tc := range ciphers {
+		t.Run(tc.name+" round-trip", func(t *testing.T) {
+			encrypted, err := svc.Encrypt(tc.plaintext, tc.name, tc.keyHex)
+			assert.NoError(t, err)
+
+			decrypted, err := svc.Decrypt(encrypted, tc.name, tc.keyHex)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.plaintext, decrypted)
+		})
+	}
+
+	t.Run("unsupported cipher returns error", func(t *testing.T) {
+		_, err := svc.Decrypt("test", "UNKNOWN-CIPHER", "")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported cipher")
+	})
+
+	t.Run("invalid base64 returns error", func(t *testing.T) {
+		_, err := svc.Decrypt("not-valid-base64!!!", "base64", "")
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid hex returns error", func(t *testing.T) {
+		_, err := svc.Decrypt("not-valid-hex!!!", "hex", "")
+		assert.Error(t, err)
+	})
+
+	t.Run("xor with invalid key returns error", func(t *testing.T) {
+		_, err := svc.Decrypt("48656c6c6f", "xor", "not-valid-hex")
+		assert.Error(t, err)
+	})
+}

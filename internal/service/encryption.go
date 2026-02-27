@@ -21,6 +21,7 @@ type DecryptionHint struct {
 // EncryptionService handles encryption of trait answers and password hashing.
 type EncryptionService interface {
 	Encrypt(plaintext string, cipherType string, keyHex string) (string, error)
+	Decrypt(ciphertext string, cipherType string, keyHex string) (string, error)
 	GetCipherInfo(cipherType string, keyHex string) DecryptionHint
 	HashPassword(password string) (string, error)
 	CheckPasswordHash(password, hash string) bool
@@ -58,6 +59,37 @@ func (s *encryptionService) Encrypt(plaintext string, cipherType string, keyHex 
 			return "", fmt.Errorf("invalid key: %w", err)
 		}
 		return encryptXORBase64(plaintext, key), nil
+	default:
+		return "", fmt.Errorf("unsupported cipher: %s", cipherType)
+	}
+}
+
+func (s *encryptionService) Decrypt(ciphertext string, cipherType string, keyHex string) (string, error) {
+	switch cipherType {
+	case "base64":
+		return decryptBase64(ciphertext)
+	case "hex":
+		return decryptHex(ciphertext)
+	case "reverse":
+		return encryptReverse(ciphertext), nil
+	case "caesar":
+		shift := caesarShift(keyHex)
+		return encryptCaesar(ciphertext, 26-shift), nil
+	case "xor":
+		key, err := hex.DecodeString(keyHex)
+		if err != nil {
+			return "", fmt.Errorf("invalid key: %w", err)
+		}
+		return decryptXOR(ciphertext, key)
+	case "vigenere":
+		keyword := deriveKeyword(keyHex)
+		return decryptVigenere(ciphertext, keyword), nil
+	case "xor-base64":
+		key, err := hex.DecodeString(keyHex)
+		if err != nil {
+			return "", fmt.Errorf("invalid key: %w", err)
+		}
+		return decryptXORBase64(ciphertext, key)
 	default:
 		return "", fmt.Errorf("unsupported cipher: %s", cipherType)
 	}
@@ -232,6 +264,71 @@ func encryptXORBase64(plaintext string, key []byte) string {
 		xored[i] = b ^ key[i%len(key)]
 	}
 	return base64.StdEncoding.EncodeToString(xored)
+}
+
+// --- decrypt helpers ---
+
+func decryptBase64(ciphertext string) (string, error) {
+	decoded, err := base64.StdEncoding.DecodeString(ciphertext)
+	if err != nil {
+		return "", fmt.Errorf("invalid base64: %w", err)
+	}
+	return string(decoded), nil
+}
+
+func decryptHex(ciphertext string) (string, error) {
+	decoded, err := hex.DecodeString(ciphertext)
+	if err != nil {
+		return "", fmt.Errorf("invalid hex: %w", err)
+	}
+	return string(decoded), nil
+}
+
+func decryptXOR(ciphertext string, key []byte) (string, error) {
+	data, err := hex.DecodeString(ciphertext)
+	if err != nil {
+		return "", fmt.Errorf("invalid hex: %w", err)
+	}
+	result := make([]byte, len(data))
+	for i, b := range data {
+		result[i] = b ^ key[i%len(key)]
+	}
+	return string(result), nil
+}
+
+func decryptVigenere(ciphertext string, keyword string) string {
+	if len(keyword) == 0 {
+		return ciphertext
+	}
+	keyRunes := []rune(strings.ToLower(keyword))
+	var b strings.Builder
+	ki := 0
+	for _, ch := range ciphertext {
+		shift := keyRunes[ki%len(keyRunes)] - 'a'
+		switch {
+		case ch >= 'a' && ch <= 'z':
+			b.WriteRune('a' + (ch-'a'-shift+26)%26)
+			ki++
+		case ch >= 'A' && ch <= 'Z':
+			b.WriteRune('A' + (ch-'A'-shift+26)%26)
+			ki++
+		default:
+			b.WriteRune(ch)
+		}
+	}
+	return b.String()
+}
+
+func decryptXORBase64(ciphertext string, key []byte) (string, error) {
+	data, err := base64.StdEncoding.DecodeString(ciphertext)
+	if err != nil {
+		return "", fmt.Errorf("invalid base64: %w", err)
+	}
+	result := make([]byte, len(data))
+	for i, b := range data {
+		result[i] = b ^ key[i%len(key)]
+	}
+	return string(result), nil
 }
 
 // --- Password hashing (unchanged) ---
