@@ -90,9 +90,8 @@ func (h *SessionHandler) GetBoard(w http.ResponseWriter, r *http.Request) {
 	// candidateId. Never expose the real candidateId, name, or imagePath.
 	board := make([]map[string]interface{}, 0, len(session.Candidates))
 	for _, c := range session.Candidates {
-		entry := make(map[string]interface{}, len(c.Traits)+1)
-		for k, v := range c.Traits {
-			entry[k] = v
+		entry := map[string]interface{}{
+			"traits": c.Traits,
 		}
 		if fakeID, ok := session.CandidateIDMapRev[c.CandidateID]; ok {
 			entry["candidateId"] = fakeID
