@@ -45,21 +45,22 @@ type Session struct {
 	CandidateIDMap    map[string]string `json:"candidateIdMap"`    // fakeID -> realID
 	CandidateIDMapRev map[string]string `json:"candidateIdMapRev"` // realID -> fakeID
 	EncryptKey        string            `json:"encryptKey"`
-	EncryptCipher     string            `json:"encryptCipher"`
+	EncryptCipher      string            `json:"encryptCipher"`
+	EncryptedQuestions map[string]bool   `json:"encryptedQuestions"`
 }
 
 // NewSession creates a new game session
 func NewSession(sessionID, teamID string, guessLimit int, seed int64, chaos ChaosProfile) *Session {
-	// Generate a random 32-byte AES key for this session
-	keyBytes := make([]byte, 32)
+	// Generate a random 8-byte key for this session (used by caesar and xor ciphers)
+	keyBytes := make([]byte, 8)
 	if _, err := cryptorand.Read(keyBytes); err != nil {
 		// Fallback: use a deterministic key from the session ID
-		keyBytes = []byte(sessionID + "00000000000000000000000000000000")[:32]
+		keyBytes = []byte(sessionID + "0000000000000000")[:8]
 	}
 	encryptKey := hex.EncodeToString(keyBytes)
 
 	// Randomly select a cipher for this session
-	ciphers := []string{"AES-256-GCM", "AES-256-CBC", "XOR"}
+	ciphers := []string{"base64", "hex", "reverse", "caesar", "xor", "vigenere", "xor-base64"}
 	encryptCipher := ciphers[mrand.Intn(len(ciphers))]
 
 	return &Session{
@@ -76,8 +77,9 @@ func NewSession(sessionID, teamID string, guessLimit int, seed int64, chaos Chao
 		Completed:         false,
 		CorrectGuess:      false,
 		GuessedCandidates: make(map[string]bool),
-		EncryptKey:        encryptKey,
-		EncryptCipher:     encryptCipher,
+		EncryptKey:         encryptKey,
+		EncryptCipher:      encryptCipher,
+		EncryptedQuestions: make(map[string]bool),
 	}
 }
 

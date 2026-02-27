@@ -52,32 +52,74 @@ func (h *TraitHandler) GetQuestions(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-// DecodeRequest represents a request to get cipher information for a session
+// DecodeRequest represents a request to get decryption info for an encrypted answer
 type DecodeRequest struct {
-	Encrypted string `json:"encrypted"`
+	QuestionID string `json:"questionId"`
+	Encrypted  string `json:"encrypted"`
 }
 
 // DecodeResponse represents the cipher hint response for client-side decryption
 type DecodeResponse struct {
 	Cipher   string `json:"cipher"`
-	Key      string `json:"key"`
+	Key      string `json:"key,omitempty"`
 	Encoding string `json:"encoding"`
 	Hint     string `json:"hint"`
 }
 
 // Decode handles POST /sessions/{sessionId}/decode
-// It returns the session's cipher and key so the client can decrypt answers locally.
+// Accepts the questionId and encrypted value, returns cipher info so the client can decrypt.
 func (h *TraitHandler) Decode(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("sessionId")
 	if sessionID == "" {
-		http.Error(w, "Missing sessionId", http.StatusBadRequest)
+		writeErrorJSON(w, http.StatusBadRequest, APIError{
+			Error:   "missing_session_id",
+			Message: "The sessionId path parameter is required.",
+		})
+		return
+	}
+
+	var req DecodeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, APIError{
+			Error:   "invalid_request_body",
+			Message: "The request body could not be parsed as JSON. Expected format: {\"questionId\": \"T01\", \"encrypted\": \"<encrypted_value>\"}.",
+		})
+		return
+	}
+
+	if req.QuestionID == "" {
+		writeErrorJSON(w, http.StatusBadRequest, APIError{
+			Error:   "missing_question_id",
+			Message: "The questionId field is required. Provide the question ID of the encrypted answer you want to decode.",
+		})
+		return
+	}
+
+	if req.Encrypted == "" {
+		writeErrorJSON(w, http.StatusBadRequest, APIError{
+			Error:   "missing_encrypted_value",
+			Message: "The encrypted field is required. Provide the encrypted answer value you received from the ask endpoint.",
+		})
 		return
 	}
 
 	session, err := h.sessionService.GetSession(r.Context(), sessionID)
 	if err != nil {
 		logging.Warn(r.Context(), "decode: session not found", "sessionId", sessionID, "error", err)
-		http.Error(w, "Session not found", http.StatusNotFound)
+		writeErrorJSON(w, http.StatusNotFound, APIError{
+			Error:     "session_not_found",
+			Message:   "No session exists with ID '" + sessionID + "'. The session may have expired or the ID is incorrect.",
+			SessionID: sessionID,
+		})
+		return
+	}
+
+	// Verify the question was actually encrypted in this session
+	if decided, exists := session.EncryptedQuestions[req.QuestionID]; !exists || !decided {
+		writeErrorJSON(w, http.StatusBadRequest, APIError{
+			Error:   "not_encrypted",
+			Message: "Question '" + req.QuestionID + "' was not encrypted in this session. Only questions with status 'encrypted' need decoding.",
+		})
 		return
 	}
 
@@ -88,7 +130,7 @@ func (h *TraitHandler) Decode(w http.ResponseWriter, r *http.Request) {
 		h.milestoneService.AwardIfAbsent(r.Context(), teamID, domain.MilestoneM5)
 	}
 
-	logging.Debug(r.Context(), "decode info returned", "sessionId", sessionID, "cipher", session.EncryptCipher)
+	logging.Debug(r.Context(), "decode info returned", "sessionId", sessionID, "questionId", req.QuestionID, "cipher", session.EncryptCipher)
 
 	response := DecodeResponse{
 		Cipher:   hint.Cipher,

@@ -237,19 +237,31 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 		s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneS3)
 	}
 
+	// Determine if this response should be encrypted.
+	// Decision is deterministic per questionID per session — once decided, it never changes.
+	shouldEncrypt := false
+	if decided, exists := session.EncryptedQuestions[questionID]; exists {
+		// Already decided for this question in this session
+		shouldEncrypt = decided
+	} else {
+		// First question in the session (before RecordQuestion was called above) is never encrypted.
+		// QuestionsAsked already includes this question (recorded above), so count > 1 means not first.
+		if len(session.QuestionsAsked) > 1 {
+			roll := rand.Intn(100) + 1 // 1-100
+			shouldEncrypt = roll > 60   // ~40% chance of encryption
+		}
+		if session.EncryptedQuestions == nil {
+			session.EncryptedQuestions = make(map[string]bool)
+		}
+		session.EncryptedQuestions[questionID] = shouldEncrypt
+		// Persist the decision
+		s.dbStore.WriteSession(ctx, session)
+	}
+
 	// Build response
 	traitAnswer := &domain.TraitAnswer{
 		QuestionID: questionID,
 		TraitKey:   traitDef.TraitKey,
-	}
-
-	// Determine if this response should be encrypted.
-	// The first question in the session is never encrypted.
-	// For subsequent questions, random percentage > 60 means encryption.
-	shouldEncrypt := false
-	if len(session.QuestionsAsked) > 1 { // >1 because we just recorded this question
-		roll := rand.Intn(100) + 1 // 1-100
-		shouldEncrypt = roll > 60   // 40% chance of encryption
 	}
 
 	if shouldEncrypt {
@@ -448,8 +460,18 @@ func (s *sessionService) Reveal(ctx context.Context, sessionID string) (*domain.
 
 	logging.Info(ctx, "session revealed", "wasCompleted", alreadyCompleted)
 
+	// Map the real candidate ID to the fake one so we never leak the real ID.
+	fakeID := session.TargetCandidate.CandidateID
+	if mapped, ok := session.CandidateIDMapRev[session.TargetCandidate.CandidateID]; ok {
+		fakeID = mapped
+	}
+	revealTarget := &domain.Candidate{
+		CandidateID: fakeID,
+		Traits:      session.TargetCandidate.Traits,
+	}
+
 	res := &domain.RevealResult{
-		Target: session.TargetCandidate,
+		Target: revealTarget,
 		Stats: domain.SessionStats{
 			TimeSeconds:    session.GetElapsedTime(),
 			QuestionsAsked: session.GetQuestionsAskedCount(),
