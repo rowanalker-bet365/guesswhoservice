@@ -2,9 +2,9 @@ package service
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"fmt"
 	"hash/fnv"
-	"math/rand"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -190,6 +190,12 @@ func (s *sessionService) GetSession(ctx context.Context, sessionID string) (*dom
 func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, questionID string) (*domain.TraitAnswer, error) {
 	logging.Debug(ctx, "processing question", "questionId", questionID)
 
+	lockValue, err := s.dbStore.AcquireSessionLock(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer s.dbStore.ReleaseSessionLock(ctx, sessionID, lockValue)
+
 	session, err := s.dbStore.ReadSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
@@ -222,20 +228,6 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 
 	// Record the question
 	session.RecordQuestion(questionID)
-	s.dbStore.WriteSession(ctx, session)
-
-	// M2: First Successful Question — awarded after the first non-degraded answer.
-	s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneM2)
-
-	// M3: Elimination Working — awarded when ≥ 3 questions have been asked in a session.
-	if session.GetQuestionsAskedCount() >= 3 {
-		s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneM3)
-	}
-
-	// S3: Resilience — awarded when a successful answer is received during an active chaos window.
-	if s.chaosService.IsInChaosWindow(session) {
-		s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneS3)
-	}
 
 	// Determine if this response should be encrypted.
 	// Decision is deterministic per questionID per session — once decided, it never changes.
@@ -247,15 +239,31 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 		// First question in the session (before RecordQuestion was called above) is never encrypted.
 		// QuestionsAsked already includes this question (recorded above), so count > 1 means not first.
 		if len(session.QuestionsAsked) > 1 {
-			roll := rand.Intn(100) + 1 // 1-100
-			shouldEncrypt = roll > 60   // ~40% chance of encryption
+			rollBytes := make([]byte, 1)
+			cryptorand.Read(rollBytes)
+			shouldEncrypt = int(rollBytes[0])%100 >= 60 // ~40% chance of encryption
 		}
 		if session.EncryptedQuestions == nil {
 			session.EncryptedQuestions = make(map[string]bool)
 		}
 		session.EncryptedQuestions[questionID] = shouldEncrypt
-		// Persist the decision
-		s.dbStore.WriteSession(ctx, session)
+	}
+
+	// Single write for all session mutations
+	s.dbStore.WriteSession(ctx, session)
+
+	// Milestones are atomic via Lua script, safe to call without session lock concerns
+	// M2: First Successful Question — awarded after the first non-degraded answer.
+	s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneM2)
+
+	// M3: Elimination Working — awarded when ≥ 3 questions have been asked in a session.
+	if session.GetQuestionsAskedCount() >= 3 {
+		s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneM3)
+	}
+
+	// S3: Resilience — awarded when a successful answer is received during an active chaos window.
+	if s.chaosService.IsInChaosWindow(session) {
+		s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneS3)
 	}
 
 	// Build response
@@ -282,6 +290,12 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 }
 
 func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, candidateID string) (*domain.GuessResult, error) {
+	lockValue, err := s.dbStore.AcquireSessionLock(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer s.dbStore.ReleaseSessionLock(ctx, sessionID, lockValue)
+
 	session, err := s.dbStore.ReadSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
@@ -353,14 +367,6 @@ func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, cand
 		session.CorrectGuess = true
 		// Mark session as complete immediately on correct guess
 		session.MarkComplete(true)
-
-		// M4: First Correct Solve — awarded on the first correct guess.
-		s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneM4)
-
-		// S1: Efficiency — awarded when a character is solved with ≤ 10 questions.
-		if session.GetQuestionsAskedCount() <= 10 {
-			s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneS1)
-		}
 	} else {
 		// Wrong guess: apply -200 penalty immediately, regardless of whether the session ends.
 		if err := s.dbStore.IncrementTeamScore(ctx, session.TeamID, -200); err != nil {
@@ -391,13 +397,23 @@ func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, cand
 
 		// Update team stats including solved characters and clearing active session
 		s.updateTeamStats(ctx, session, finalScore, finalCorrect, realCandidateID)
+	}
 
-		// S2: Automation — awarded once the team reaches 3+ total correct solves.
-		// Read the updated solve count after updateTeamStats has incremented it.
-		if finalCorrect {
-			if teamData, err := s.dbStore.ReadTeamData(ctx, session.TeamID); err == nil && teamData.Solves >= 3 {
-				s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneS2)
-			}
+	// Milestones are atomic via Lua script
+	if correct {
+		// M4: First Correct Solve — awarded on the first correct guess.
+		s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneM4)
+
+		// S1: Efficiency — awarded when a character is solved with ≤ 10 questions.
+		if session.GetQuestionsAskedCount() <= 10 {
+			s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneS1)
+		}
+	}
+
+	// S2: Automation — awarded once the team reaches 3+ total correct solves.
+	if session.Completed && session.CorrectGuess {
+		if teamData, err := s.dbStore.ReadTeamData(ctx, session.TeamID); err == nil && teamData.Solves >= 3 {
+			s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneS2)
 		}
 	}
 
@@ -432,6 +448,12 @@ func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, cand
 }
 
 func (s *sessionService) Reveal(ctx context.Context, sessionID string) (*domain.RevealResult, error) {
+	lockValue, err := s.dbStore.AcquireSessionLock(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer s.dbStore.ReleaseSessionLock(ctx, sessionID, lockValue)
+
 	session, err := s.dbStore.ReadSession(ctx, sessionID)
 	if err != nil {
 		return nil, err

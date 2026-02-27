@@ -162,7 +162,13 @@ func (s *chaosService) IsInChaosWindow(session *domain.Session) bool {
 }
 
 func (s *chaosService) isInChaosWindow(session *domain.Session) bool {
-	if !s.IsEnabled() {
+	s.mu.RLock()
+	enabled := s.enabled
+	defaultInterval := s.intervalSeconds
+	defaultWindow := s.windowSeconds
+	s.mu.RUnlock()
+
+	if !enabled {
 		return false
 	}
 
@@ -175,10 +181,10 @@ func (s *chaosService) isInChaosWindow(session *domain.Session) bool {
 	windowSec := float64(session.ChaosProfile.WindowSeconds)
 
 	if intervalSec == 0 {
-		intervalSec = float64(s.intervalSeconds)
+		intervalSec = float64(defaultInterval)
 	}
 	if windowSec == 0 {
-		windowSec = float64(s.windowSeconds)
+		windowSec = float64(defaultWindow)
 	}
 
 	positionInInterval := float64(int(elapsed) % int(intervalSec))

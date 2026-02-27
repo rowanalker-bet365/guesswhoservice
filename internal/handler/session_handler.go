@@ -26,11 +26,10 @@ func NewSessionHandler(sessionService service.SessionService, traitCatalog servi
 
 // StartSessionResponse represents the response when starting a session
 type StartSessionResponse struct {
-	SessionID       string      `json:"sessionId"`
-	BoardSize       int         `json:"boardSize"`
-	TraitsAvailable int         `json:"traitsAvailable"`
-	GuessLimit      int         `json:"guessLimit"`
-	ChaosProfile    interface{} `json:"chaosProfile"`
+	SessionID       string `json:"sessionId"`
+	BoardSize       int    `json:"boardSize"`
+	TraitsAvailable int    `json:"traitsAvailable"`
+	GuessLimit      int    `json:"guessLimit"`
 }
 
 // StartSession handles POST /sessions/start
@@ -61,7 +60,6 @@ func (h *SessionHandler) StartSession(w http.ResponseWriter, r *http.Request) {
 		BoardSize:       session.BoardSize,
 		TraitsAvailable: session.TraitsAvailable,
 		GuessLimit:      session.GuessLimit,
-		ChaosProfile:    session.ChaosProfile,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -3,7 +3,6 @@ package domain
 import (
 	cryptorand "crypto/rand"
 	"encoding/hex"
-	mrand "math/rand"
 	"time"
 )
 
@@ -59,9 +58,11 @@ func NewSession(sessionID, teamID string, guessLimit int, seed int64, chaos Chao
 	}
 	encryptKey := hex.EncodeToString(keyBytes)
 
-	// Randomly select a cipher for this session
+	// Randomly select a cipher for this session using crypto/rand
 	ciphers := []string{"base64", "hex", "reverse", "caesar", "xor", "vigenere", "xor-base64"}
-	encryptCipher := ciphers[mrand.Intn(len(ciphers))]
+	idxBytes := make([]byte, 1)
+	cryptorand.Read(idxBytes)
+	encryptCipher := ciphers[int(idxBytes[0])%len(ciphers)]
 
 	return &Session{
 		SessionID:         sessionID,
