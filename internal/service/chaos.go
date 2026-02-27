@@ -31,6 +31,9 @@ type ChaosService interface {
 
 	// GetWindowConfig returns the chaos window configuration.
 	GetWindowConfig() (windowSeconds, intervalSeconds int)
+
+	// SetWindowConfig updates the chaos window and interval durations.
+	SetWindowConfig(windowSeconds, intervalSeconds int)
 }
 
 type chaosService struct {
@@ -76,7 +79,20 @@ func (s *chaosService) IsEnabled() bool {
 }
 
 func (s *chaosService) GetWindowConfig() (windowSeconds, intervalSeconds int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.windowSeconds, s.intervalSeconds
+}
+
+func (s *chaosService) SetWindowConfig(windowSeconds, intervalSeconds int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if windowSeconds > 0 {
+		s.windowSeconds = windowSeconds
+	}
+	if intervalSeconds > 0 {
+		s.intervalSeconds = intervalSeconds
+	}
 }
 
 func (s *chaosService) ShouldFail(session *domain.Session) bool {
