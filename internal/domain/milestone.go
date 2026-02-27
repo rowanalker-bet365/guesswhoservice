@@ -31,13 +31,13 @@ type MilestoneInfo struct {
 // AllMilestones is the complete ordered list of milestones with their metadata.
 var AllMilestones = []MilestoneInfo{
 	{MilestoneM1, "First Round Started", "Started your first game session", CoreMilestoneScore},
-	{MilestoneM2, "First Successful Question", "Received your first non-degraded answer", CoreMilestoneScore},
+	{MilestoneM2, "First Successful Question", "Received your first successful answer", CoreMilestoneScore},
 	{MilestoneM3, "Elimination Working", "Asked 3+ questions in a single session", CoreMilestoneScore},
 	{MilestoneM4, "First Correct Solve", "Correctly identified a character", CoreMilestoneScore},
 	{MilestoneM5, "Encrypted Answer Handled", "Successfully decoded an encrypted answer", CoreMilestoneScore},
 	{MilestoneS1, "Efficiency", "Solved a character with 10 or fewer questions", StretchMilestoneScore},
 	{MilestoneS2, "Automation", "Achieved 3+ total correct solves", StretchMilestoneScore},
-	{MilestoneS3, "Resilience", "Got a valid answer from a flaky trait during a chaos window", StretchMilestoneScore},
+	{MilestoneS3, "Resilience", "Successfully received a valid response during an active chaos window", StretchMilestoneScore},
 }
 
 // MilestoneScoreMap provides a quick lookup from milestone ID to its score value.

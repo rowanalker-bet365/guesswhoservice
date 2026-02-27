@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"math/rand"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -31,14 +32,12 @@ type sessionService struct {
 	chaosService      ChaosService
 	scoringService    ScoringService
 	milestoneService  MilestoneService
-	chaosEnabled      bool
 	chaosInterval     int
 	chaosWindow       int
 }
 
 // SessionServiceConfig holds configuration for the session service
 type SessionServiceConfig struct {
-	ChaosEnabled  bool
 	ChaosInterval int
 	ChaosWindow   int
 }
@@ -64,7 +63,6 @@ func NewSessionService(
 		chaosService:      chaosService,
 		scoringService:    scoringService,
 		milestoneService:  milestoneService,
-		chaosEnabled:      config.ChaosEnabled,
 		chaosInterval:     config.ChaosInterval,
 		chaosWindow:       config.ChaosWindow,
 	}
@@ -207,19 +205,13 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 		return nil, fmt.Errorf("invalid question ID: %s", questionID)
 	}
 
-	// Check for chaos/failure injection
-	if s.chaosService.ShouldFail(session, traitDef) {
+	// Check for chaos/failure injection — returns a ChaosError (real HTTP error)
+	if s.chaosService.ShouldFail(session) {
 		session.IncrementFailure("failed")
 		s.dbStore.WriteSession(ctx, session)
 
-		logging.Warn(ctx, "chaos: degraded response", "questionId", questionID)
-
-		return &domain.TraitAnswer{
-			QuestionID: questionID,
-			TraitKey:   traitDef.TraitKey,
-			Status:     "degraded",
-			RetryAfter: s.chaosService.GetRetryDelay(),
-		}, nil
+		logging.Warn(ctx, "chaos: injecting failure", "questionId", questionID)
+		return nil, s.chaosService.GetChaosError()
 	}
 
 	// Get the answer from the target candidate
@@ -240,9 +232,8 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 		s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneM3)
 	}
 
-	// S3: Resilience — awarded when a successful answer is received for a flaky trait
-	// while the session is inside a chaos window. Chaos must be enabled for this to trigger.
-	if traitDef.IsFlaky && s.chaosService.IsInChaosWindow(session) {
+	// S3: Resilience — awarded when a successful answer is received during an active chaos window.
+	if s.chaosService.IsInChaosWindow(session) {
 		s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneS3)
 	}
 
@@ -252,20 +243,28 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 		TraitKey:   traitDef.TraitKey,
 	}
 
-	// Encrypt if needed
-	if traitDef.IsEncrypted {
+	// Determine if this response should be encrypted.
+	// The first question in the session is never encrypted.
+	// For subsequent questions, random percentage > 60 means encryption.
+	shouldEncrypt := false
+	if len(session.QuestionsAsked) > 1 { // >1 because we just recorded this question
+		roll := rand.Intn(100) + 1 // 1-100
+		shouldEncrypt = roll > 60   // 40% chance of encryption
+	}
+
+	if shouldEncrypt {
 		plaintext := fmt.Sprintf("%v", answer)
-		encrypted, err := s.encryptionService.Encrypt(plaintext)
+		encrypted, err := s.encryptionService.Encrypt(plaintext, session.EncryptCipher, session.EncryptKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to encrypt answer: %w", err)
 		}
-
-		traitAnswer.Encrypted = encrypted
+		traitAnswer.Answer = encrypted
+		traitAnswer.Status = "encrypted"
 	} else {
 		traitAnswer.Answer = answer
 	}
 
-	logging.Debug(ctx, "question answered", "questionId", questionID, "encrypted", traitDef.IsEncrypted)
+	logging.Debug(ctx, "question answered", "questionId", questionID, "cipher", session.EncryptCipher)
 
 	return traitAnswer, nil
 }
@@ -278,6 +277,14 @@ func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, cand
 
 	if session.Completed {
 		return nil, fmt.Errorf("session already completed")
+	}
+
+	// Chaos injection — can fail any session API during chaos windows
+	if s.chaosService.ShouldFail(session) {
+		session.IncrementFailure("failed")
+		s.dbStore.WriteSession(ctx, session)
+		logging.Warn(ctx, "chaos: injecting failure on guess", "candidateId", candidateID)
+		return nil, s.chaosService.GetChaosError()
 	}
 
 	// If the player has used all allowed failed guesses, block further guesses
@@ -416,6 +423,14 @@ func (s *sessionService) Reveal(ctx context.Context, sessionID string) (*domain.
 	session, err := s.dbStore.ReadSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Chaos injection
+	if s.chaosService.ShouldFail(session) {
+		session.IncrementFailure("failed")
+		s.dbStore.WriteSession(ctx, session)
+		logging.Warn(ctx, "chaos: injecting failure on reveal")
+		return nil, s.chaosService.GetChaosError()
 	}
 
 	alreadyCompleted := session.Completed
