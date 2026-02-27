@@ -334,15 +334,11 @@ func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, cand
 	// Record on leaderboard only when the session actually ends
 	if session.Completed {
 		finalCorrect := session.CorrectGuess
+		// Reuse the score already computed above to avoid a second CalculateScore call
+		// (calculateTimeBonus uses time.Since, so two calls return different values).
 		finalScore := 0
 		if finalCorrect {
-			fb := s.scoringService.CalculateScore(session)
-			finalScore = fb.Base + fb.TimeBonus + fb.QuestionBonus - fb.ReliabilityPenalty
-			if finalScore < 0 {
-				finalScore = 0
-			}
-		} else {
-			finalScore = 0
+			finalScore = totalScore
 		}
 
 		// Update team stats including solved characters and clearing active session
@@ -422,12 +418,12 @@ func (s *sessionService) Reveal(ctx context.Context, sessionID string) (*domain.
 
 func (s *sessionService) updateTeamStats(ctx context.Context, session *domain.Session, score int, correct bool, solvedCandidateID string) {
 	if correct && solvedCandidateID != "" {
-		// Atomically update score, solves, solved-characters set, leaderboard, and masterboard
-		// in a single Lua script to prevent race conditions.
+		logging.Info(ctx, fmt.Sprintf("[MASTERBOARD] Calling UpdateTeamStatsAtomic: team=%s char=%s score=%d", session.TeamID, solvedCandidateID, score))
 		if err := s.dbStore.UpdateTeamStatsAtomic(ctx, session.TeamID, solvedCandidateID, score); err != nil {
-			logging.Error(ctx, "failed atomic team stats update", "error", err)
+			logging.Error(ctx, "Error in atomic team stats update for team", "error", err)
 			return
 		}
+		logging.Info(ctx, fmt.Sprintf("[MASTERBOARD] Atomic update succeeded: team=%s char=%s", session.TeamID, solvedCandidateID))
 
 		// Conditionally update fastest solve time (atomic compare-and-set via Lua).
 		elapsed := time.Duration(session.GetElapsedTime()) * time.Second

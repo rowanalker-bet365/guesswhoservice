@@ -395,11 +395,15 @@ func (s *Store) GetTeamColors(ctx context.Context, teamIDs []string) (map[string
 	return result, nil
 }
 
-// GetMasterboardFromSets reads the masterboard by fetching all character IDs from the
-// initialised "masterboard" hash (for the full character list) and then reading each
-// "masterboard:<characterID>" set that the Lua script populates.
+// GetMasterboardFromSets reads the masterboard using an inverted-mapping strategy that is
+// resilient to masterboard:<id> SET flushes. It:
+//  1. Reads all character IDs from the "masterboard" HASH (full character list, including unsolved).
+//  2. Reads all team IDs from the "all_team_ids" SET.
+//  3. Pipelines SMEMBERS team:<teamID>:solved_characters for every team.
+//  4. Builds an inverted map characterID -> []teamID from those results.
+//  5. Returns the inverted map, defaulting to an empty slice for unsolved characters.
 func (s *Store) GetMasterboardFromSets(ctx context.Context) (map[string][]string, error) {
-	// Get all character IDs that were registered at startup.
+	// Step 1: Get all character IDs registered at startup.
 	charIDs, err := s.client.HKeys(ctx, "masterboard").Result()
 	if err != nil && err != redis.Nil {
 		return nil, err
@@ -409,24 +413,42 @@ func (s *Store) GetMasterboardFromSets(ctx context.Context) (map[string][]string
 		return map[string][]string{}, nil
 	}
 
-	// Pipeline SMEMBERS for each character's set.
+	// Step 2: Get all team IDs.
+	teamIDs, err := s.client.SMembers(ctx, "all_team_ids").Result()
+	if err != nil && err != redis.Nil {
+		return nil, err
+	}
+
+	// Initialise result with empty slices for every character.
+	result := make(map[string][]string, len(charIDs))
+	for _, id := range charIDs {
+		result[id] = []string{}
+	}
+
+	if len(teamIDs) == 0 {
+		return result, nil
+	}
+
+	// Step 3: Pipeline SMEMBERS team:<teamID>:solved_characters for every team.
 	pipe := s.client.Pipeline()
-	memberCmds := make([]*redis.StringSliceCmd, len(charIDs))
-	for i, id := range charIDs {
-		memberCmds[i] = pipe.SMembers(ctx, "masterboard:"+id)
+	solvedCmds := make([]*redis.StringSliceCmd, len(teamIDs))
+	for i, teamID := range teamIDs {
+		solvedCmds[i] = pipe.SMembers(ctx, "team:"+teamID+":solved_characters")
 	}
 	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
 		return nil, err
 	}
 
-	result := make(map[string][]string, len(charIDs))
-	for i, id := range charIDs {
-		members, _ := memberCmds[i].Result()
-		if members == nil {
-			members = []string{}
+	// Step 4: Build inverted map characterID -> []teamID.
+	for i, teamID := range teamIDs {
+		solved, _ := solvedCmds[i].Result()
+		for _, charID := range solved {
+			if _, known := result[charID]; known {
+				result[charID] = append(result[charID], teamID)
+			}
 		}
-		result[id] = members
 	}
+
 	return result, nil
 }
 
