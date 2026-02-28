@@ -216,7 +216,7 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 		session.IncrementFailure("failed")
 		s.dbStore.WriteSession(ctx, session)
 
-		logging.Warn(ctx, "chaos: injecting failure", "questionId", questionID)
+		logging.Info(ctx, "chaos: injecting failure", "questionId", questionID)
 		return nil, s.chaosService.GetChaosError()
 	}
 
@@ -309,7 +309,7 @@ func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, cand
 	if s.chaosService.ShouldFail(session) {
 		session.IncrementFailure("failed")
 		s.dbStore.WriteSession(ctx, session)
-		logging.Warn(ctx, "chaos: injecting failure on guess", "candidateId", candidateID)
+		logging.Info(ctx, "chaos: injecting failure on guess", "candidateId", candidateID)
 		return nil, s.chaosService.GetChaosError()
 	}
 
@@ -463,7 +463,7 @@ func (s *sessionService) Reveal(ctx context.Context, sessionID string) (*domain.
 	if s.chaosService.ShouldFail(session) {
 		session.IncrementFailure("failed")
 		s.dbStore.WriteSession(ctx, session)
-		logging.Warn(ctx, "chaos: injecting failure on reveal")
+		logging.Info(ctx, "chaos: injecting failure on reveal")
 		return nil, s.chaosService.GetChaosError()
 	}
 

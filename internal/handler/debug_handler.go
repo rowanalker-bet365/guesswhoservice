@@ -110,7 +110,7 @@ func (h *DebugHandler) FlushAll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to flush redis: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	logging.Warn(r.Context(), "Redis flushed - all data deleted")
+	logging.Info(r.Context(), "Redis flushed - all data deleted")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{

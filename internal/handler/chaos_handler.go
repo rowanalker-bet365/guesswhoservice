@@ -66,10 +66,10 @@ func (h *ChaosHandler) TriggerChaos(w http.ResponseWriter, r *http.Request) {
 
 	if req.Enabled {
 		h.chaosService.Enable()
-		logging.Warn(r.Context(), "chaos mode ACTIVATED via trigger")
+		logging.Info(r.Context(), "chaos mode ACTIVATED via trigger")
 	} else {
 		h.chaosService.Disable()
-		logging.Warn(r.Context(), "chaos mode DEACTIVATED via trigger")
+		logging.Info(r.Context(), "chaos mode DEACTIVATED via trigger")
 	}
 
 	if req.WindowSeconds > 0 || req.IntervalSeconds > 0 {

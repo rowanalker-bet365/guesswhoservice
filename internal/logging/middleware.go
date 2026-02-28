@@ -88,7 +88,7 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 		defer func() {
 			if rec := recover(); rec != nil {
 				stack := string(debug.Stack())
-				logger.Error("request completed",
+				logger.Error("request panicked",
 					"panic", fmt.Sprintf("%v", rec),
 					"stack", stack,
 					FieldStatusCode, http.StatusInternalServerError,

@@ -145,7 +145,7 @@ func (h *SessionHandler) AskQuestion(w http.ResponseWriter, r *http.Request) {
 		// Check for chaos-injected error first
 		var chaosErr *service.ChaosError
 		if errors.As(err, &chaosErr) {
-			logging.Warn(r.Context(), "chaos: injected failure on ask", "questionId", req.QuestionID)
+			logging.Info(r.Context(), "chaos: injected failure on ask", "questionId", req.QuestionID)
 			writeErrorJSON(w, chaosErr.StatusCode, APIError{
 				Error:   chaosErr.ErrorCode,
 				Message: chaosErr.Message,
@@ -188,7 +188,7 @@ func (h *SessionHandler) SubmitGuess(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var chaosErr *service.ChaosError
 		if errors.As(err, &chaosErr) {
-			logging.Warn(r.Context(), "chaos: injected failure on guess", "candidateId", req.CandidateID)
+			logging.Info(r.Context(), "chaos: injected failure on guess", "candidateId", req.CandidateID)
 			writeErrorJSON(w, chaosErr.StatusCode, APIError{
 				Error:   chaosErr.ErrorCode,
 				Message: chaosErr.Message,
@@ -279,7 +279,7 @@ func (h *SessionHandler) Reveal(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var chaosErr *service.ChaosError
 		if errors.As(err, &chaosErr) {
-			logging.Warn(r.Context(), "chaos: injected failure on reveal")
+			logging.Info(r.Context(), "chaos: injected failure on reveal")
 			writeErrorJSON(w, chaosErr.StatusCode, APIError{
 				Error:   chaosErr.ErrorCode,
 				Message: chaosErr.Message,
