@@ -110,6 +110,9 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 		}
 
 		switch {
+		case rw.chaosInjected:
+			logAttrs = append(logAttrs, "chaos", true)
+			logger.Info("request completed", logAttrs...)
 		case rw.statusCode >= 500:
 			logger.Error("request completed", logAttrs...)
 		case rw.statusCode >= 400:
@@ -123,9 +126,18 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 // responseWriter wraps http.ResponseWriter to capture the status code and bytes written.
 type responseWriter struct {
 	http.ResponseWriter
-	statusCode int
-	bytes      int
-	written    bool
+	statusCode    int
+	bytes         int
+	written       bool
+	chaosInjected bool
+}
+
+// MarkChaosInjected flags the response as a chaos-injected failure so the
+// logging middleware can log it at Info level instead of Error/Warn.
+func MarkChaosInjected(w http.ResponseWriter) {
+	if rw, ok := w.(*responseWriter); ok {
+		rw.chaosInjected = true
+	}
 }
 
 func (rw *responseWriter) WriteHeader(code int) {
