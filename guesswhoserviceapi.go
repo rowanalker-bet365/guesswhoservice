@@ -67,13 +67,11 @@ func main() {
 	}
 	logger.Info("connected to Redis", "addr", cfg.RedisAddr)
 
-	// Initialize repositories
-	dbStore := db.NewStore(redisClient)
-
 	// Initialize services
 	traitCatalog := service.NewTraitCatalogService()
 
-	// Load Character Catalog
+	// Load Character Catalog before creating the store so that character IDs
+	// can be embedded in the store for idempotent masterboard initialization.
 	characterCatalog, err := service.NewCharacterCatalogService("data/characters.json")
 	if err != nil {
 		logger.Error("failed to load character catalog", "error", err)
@@ -81,12 +79,19 @@ func main() {
 	}
 	logger.Info("character catalog loaded", "count", len(characterCatalog.GetAllCharacters()))
 
-	// Initialize Masterboard using a fresh background context (not the ping timeout context).
+	// Build the character ID list used to seed the masterboard HASH.
 	var charIDs []string
 	for _, char := range characterCatalog.GetAllCharacters() {
 		charIDs = append(charIDs, char.CandidateID)
 	}
-	if err := dbStore.InitializeMasterboard(context.Background(), charIDs); err != nil {
+
+	// Initialize repositories — pass charIDs so the store can re-initialize the
+	// masterboard HASH at any time (e.g. after a debug flush) without needing the
+	// caller to supply the list again.
+	dbStore := db.NewStore(redisClient, charIDs)
+
+	// Initialize Masterboard using a fresh background context (not the ping timeout context).
+	if err := dbStore.InitializeMasterboard(context.Background()); err != nil {
 		logger.Error("failed to initialize masterboard", "error", err)
 		os.Exit(1)
 	}

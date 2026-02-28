@@ -97,6 +97,8 @@ func (h *DebugHandler) GetTeamDebug(w http.ResponseWriter, r *http.Request) {
 
 // FlushAll handles POST /debug/flush
 // Wipes every key in Redis — use before a fresh hackathon run.
+// After flushing, the masterboard HASH is immediately re-seeded so that
+// GET /client/game/master-board never returns {"characters":null} after a flush.
 func (h *DebugHandler) FlushAll(w http.ResponseWriter, r *http.Request) {
 	if !h.authorize(w, r) {
 		return
@@ -110,7 +112,18 @@ func (h *DebugHandler) FlushAll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to flush redis: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	logging.Info(r.Context(), "Redis flushed - all data deleted")
+	logging.Warn(r.Context(), "Redis flushed - all data deleted")
+
+	// Re-seed the masterboard HASH immediately so the system is never left in a
+	// broken state where HKeys("masterboard") returns zero results.
+	if err := h.store.InitializeMasterboard(r.Context()); err != nil {
+		logging.Error(r.Context(), "failed to re-initialize masterboard after flush", "error", err)
+		// Non-fatal: the self-healing in GetMasterboardFromSets will recover on the
+		// next request, but log the error so operators are aware.
+	} else {
+		logging.Info(r.Context(), "masterboard re-initialized after flush")
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{

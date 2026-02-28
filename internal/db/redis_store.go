@@ -120,12 +120,16 @@ type TeamData struct {
 
 // Store handles all Redis data interactions.
 type Store struct {
-	client *redis.Client
+	client       *redis.Client
+	characterIDs []string
 }
 
 // NewStore creates a new Store.
-func NewStore(client *redis.Client) *Store {
-	return &Store{client: client}
+// characterIDs is the full list of character IDs loaded from the catalog at startup;
+// it is stored so that InitializeMasterboard can be called at any time without
+// needing the caller to supply the list again (e.g. after a debug flush).
+func NewStore(client *redis.Client, characterIDs []string) *Store {
+	return &Store{client: client, characterIDs: characterIDs}
 }
 
 // WriteTeamData saves the TeamData to Redis.
@@ -264,26 +268,22 @@ func (s *Store) ReadSession(ctx context.Context, sessionID string) (*domain.Sess
 	return &session, nil
 }
 
-// InitializeMasterboard sets up the initial state of the Masterboard in Redis.
-// It iterates through the loaded character IDs and sets each field in the Hash to an empty JSON array `[]`.
-// It only initializes if the Masterboard doesn't already exist.
-func (s *Store) InitializeMasterboard(ctx context.Context, characterIDs []string) error {
-	exists, err := s.client.Exists(ctx, "masterboard").Result()
-	if err != nil {
-		return err
-	}
-
-	if exists > 0 {
-		// Masterboard already exists, do not overwrite
+// InitializeMasterboard ensures the "masterboard" HASH contains an entry for every
+// known character ID. It is idempotent: HSetNX only writes a field when it does not
+// already exist, so calling this on an already-populated board is a safe no-op for
+// existing entries while filling in any that are missing.
+//
+// This design means the function is safe to call at startup, after a debug flush,
+// or from GetMasterboardFromSets when self-healing a missing HASH.
+func (s *Store) InitializeMasterboard(ctx context.Context) error {
+	if len(s.characterIDs) == 0 {
 		return nil
 	}
-
 	pipe := s.client.Pipeline()
-	for _, id := range characterIDs {
-		pipe.HSet(ctx, "masterboard", id, "[]")
+	for _, id := range s.characterIDs {
+		pipe.HSetNX(ctx, "masterboard", id, "[]")
 	}
-
-	_, err = pipe.Exec(ctx)
+	_, err := pipe.Exec(ctx)
 	return err
 }
 
@@ -458,6 +458,17 @@ func (s *Store) GetMasterboardFromSets(ctx context.Context) (map[string][]string
 	charIDs, err := s.client.HKeys(ctx, "masterboard").Result()
 	if err != nil && err != redis.Nil {
 		return nil, err
+	}
+
+	// Self-heal: if the "masterboard" HASH is missing (e.g. after a debug flush),
+	// re-initialize it from the stored character list and retry the lookup once.
+	if len(charIDs) == 0 {
+		if initErr := s.InitializeMasterboard(ctx); initErr == nil {
+			charIDs, err = s.client.HKeys(ctx, "masterboard").Result()
+			if err != nil && err != redis.Nil {
+				return nil, err
+			}
+		}
 	}
 
 	if len(charIDs) == 0 {
