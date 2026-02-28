@@ -146,7 +146,7 @@ func (h *SessionHandler) AskQuestion(w http.ResponseWriter, r *http.Request) {
 		var chaosErr *service.ChaosError
 		if errors.As(err, &chaosErr) {
 			logging.Info(r.Context(), "chaos: injected failure on ask", "questionId", req.QuestionID)
-			logging.MarkChaosInjected(w)
+			logging.MarkChaosInjected(r)
 			writeErrorJSON(w, chaosErr.StatusCode, APIError{
 				Error:   chaosErr.ErrorCode,
 				Message: chaosErr.Message,
@@ -190,7 +190,7 @@ func (h *SessionHandler) SubmitGuess(w http.ResponseWriter, r *http.Request) {
 		var chaosErr *service.ChaosError
 		if errors.As(err, &chaosErr) {
 			logging.Info(r.Context(), "chaos: injected failure on guess", "candidateId", req.CandidateID)
-			logging.MarkChaosInjected(w)
+			logging.MarkChaosInjected(r)
 			writeErrorJSON(w, chaosErr.StatusCode, APIError{
 				Error:   chaosErr.ErrorCode,
 				Message: chaosErr.Message,
@@ -282,7 +282,7 @@ func (h *SessionHandler) Reveal(w http.ResponseWriter, r *http.Request) {
 		var chaosErr *service.ChaosError
 		if errors.As(err, &chaosErr) {
 			logging.Info(r.Context(), "chaos: injected failure on reveal")
-			logging.MarkChaosInjected(w)
+			logging.MarkChaosInjected(r)
 			writeErrorJSON(w, chaosErr.StatusCode, APIError{
 				Error:   chaosErr.ErrorCode,
 				Message: chaosErr.Message,

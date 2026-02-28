@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,26 @@ import (
 )
 
 var sessionIDPattern = regexp.MustCompile(`sessions/(s_[^/]+)`)
+
+// requestMeta holds mutable per-request flags that handlers can set and the
+// logging middleware reads back after the handler returns. It is stored as a
+// pointer in the request context so mutations in the handler (which may be
+// behind wrapping middlewares like http.TimeoutHandler) are visible to the
+// logging middleware.
+type requestMeta struct {
+	chaosInjected bool
+}
+
+type requestMetaKey struct{}
+
+// MarkChaosInjected flags the current request as a chaos-injected failure so
+// the logging middleware logs it at Info level instead of Error/Warn.
+// Must be called with the http.Request from the handler.
+func MarkChaosInjected(r *http.Request) {
+	if meta, ok := r.Context().Value(requestMetaKey{}).(*requestMeta); ok {
+		meta.chaosInjected = true
+	}
+}
 
 // HTTPMiddleware returns HTTP middleware that creates a request-scoped logger
 // with trace, request ID, and other contextual fields, and logs request
@@ -76,6 +97,8 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 		// Create request-scoped logger and inject into context
 		logger := slog.Default().With(attrs...)
 		ctx := WithLogger(r.Context(), logger)
+		meta := &requestMeta{}
+		ctx = context.WithValue(ctx, requestMetaKey{}, meta)
 		r = r.WithContext(ctx)
 
 		// Wrap response writer to capture status code and bytes
@@ -110,7 +133,7 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 		}
 
 		switch {
-		case rw.chaosInjected:
+		case meta.chaosInjected:
 			logAttrs = append(logAttrs, "chaos", true)
 			logger.Info("request completed", logAttrs...)
 		case rw.statusCode >= 500:
@@ -126,18 +149,9 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 // responseWriter wraps http.ResponseWriter to capture the status code and bytes written.
 type responseWriter struct {
 	http.ResponseWriter
-	statusCode    int
-	bytes         int
-	written       bool
-	chaosInjected bool
-}
-
-// MarkChaosInjected flags the response as a chaos-injected failure so the
-// logging middleware can log it at Info level instead of Error/Warn.
-func MarkChaosInjected(w http.ResponseWriter) {
-	if rw, ok := w.(*responseWriter); ok {
-		rw.chaosInjected = true
-	}
+	statusCode int
+	bytes      int
+	written    bool
 }
 
 func (rw *responseWriter) WriteHeader(code int) {
