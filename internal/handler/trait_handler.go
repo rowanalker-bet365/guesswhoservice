@@ -6,7 +6,6 @@ import (
 
 	"github.com/guesswho/internal/domain"
 	"github.com/guesswho/internal/logging"
-	"github.com/guesswho/internal/middleware"
 	"github.com/guesswho/internal/service"
 )
 
@@ -126,9 +125,7 @@ func (h *TraitHandler) Decode(w http.ResponseWriter, r *http.Request) {
 	hint := h.encryptionService.GetCipherInfo(session.EncryptCipher, session.EncryptKey)
 
 	// M5: Encrypted Answer Handled — awarded once when a team successfully calls decode.
-	if teamID, ok := r.Context().Value(middleware.TeamIDKey).(string); ok && teamID != "" {
-		h.milestoneService.AwardIfAbsent(r.Context(), teamID, domain.MilestoneM5)
-	}
+	h.milestoneService.AwardIfAbsent(r.Context(), session.TeamID, domain.MilestoneM5)
 
 	logging.Debug(r.Context(), "decode info returned", "sessionId", sessionID, "questionId", req.QuestionID, "cipher", session.EncryptCipher)
 
