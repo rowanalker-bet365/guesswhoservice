@@ -1,3 +1,11 @@
+# To-Do & Planned Enhancements
+
+> Last reviewed: March 2026
+
+This document tracks planned improvements and deferred enhancements for the Guess Who platform.
+
+---
+
 Skip a character => For teams to come back to it later.
 
 More sessions => penalize => Players in a team could divide and conquer

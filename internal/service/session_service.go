@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/binary"
+	"errors"
 	"fmt"
-	"hash/fnv"
 	"math/rand"
 	"time"
 
@@ -13,6 +15,10 @@ import (
 	"github.com/guesswho/internal/domain"
 	"github.com/guesswho/internal/logging"
 )
+
+// ErrTooManySessions is returned by StartSession when a team already has the
+// maximum number of concurrent active sessions (2).
+var ErrTooManySessions = errors.New("too many active sessions for this team")
 
 // SessionService manages game sessions
 type SessionService interface {
@@ -68,19 +74,33 @@ func NewSessionService(
 	}
 }
 
-// sessionShuffleSeed derives a deterministic per-session seed from the sessionID.
-func sessionShuffleSeed(sessionID string) int64 {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(sessionID))
-	return int64(h.Sum64())
+// generateRandomSeed returns a cryptographically random int64 seed.
+// Falls back to time.Now().UnixNano() if the OS entropy source is unavailable,
+// which is still not predictable from the session ID.
+func generateRandomSeed() int64 {
+	var b [8]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		return time.Now().UnixNano() // fallback, still not predictable from session ID
+	}
+	return int64(binary.LittleEndian.Uint64(b[:]))
 }
 
 func (s *sessionService) StartSession(ctx context.Context, teamID string) (*domain.Session, error) {
+	// HP3: Enforce per-team concurrent session limit (max 2 active sessions).
+	// Redis key: "active_sessions:team:<teamID>"
+	count, err := s.dbStore.CountActiveSessions(ctx, teamID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check active sessions: %w", err)
+	}
+	if count >= 2 {
+		return nil, ErrTooManySessions
+	}
+
 	sessionID := fmt.Sprintf("s_%s", uuid.New().String()[:8])
 
-	// Derive a unique seed from the session ID so that every session gets a
-	// different board order and target character.
-	perSessionSeed := sessionShuffleSeed(sessionID)
+	// Generate a cryptographically random seed so that the board order and
+	// target character cannot be predicted from the session ID.
+	perSessionSeed := generateRandomSeed()
 
 	chaosProfile := domain.ChaosProfile{
 		Mode:            domain.ChaosModeScheduled,
@@ -144,6 +164,28 @@ func (s *sessionService) StartSession(ctx context.Context, teamID string) (*doma
 	session.CandidateIDMap = candidateIDMap
 	session.CandidateIDMapRev = candidateIDMapRev
 
+	// For each candidate, independently shuffle all trait keys and assign a
+	// unique random 20-trait visible subset. This prevents an AI from
+	// reconstructing the full 64×64 matrix by comparing board responses.
+	allTraitDefs := s.traitCatalog.GetAllTraits()
+	baseTraitKeys := make([]string, len(allTraitDefs))
+	for i, td := range allTraitDefs {
+		baseTraitKeys[i] = td.TraitKey
+	}
+	subsetSize := 20
+	if len(baseTraitKeys) < subsetSize {
+		subsetSize = len(baseTraitKeys)
+	}
+	rng := rand.New(rand.NewSource(perSessionSeed))
+	candidateTraitSubsets := make(map[string][]string, len(availableCandidates))
+	for _, c := range availableCandidates {
+		shuffled := make([]string, len(baseTraitKeys))
+		copy(shuffled, baseTraitKeys)
+		rng.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
+		candidateTraitSubsets[c.CandidateID] = shuffled[:subsetSize]
+	}
+	session.CandidateTraitSubsets = candidateTraitSubsets
+
 	// Select a random target using the per-session seed (SelectTarget uses
 	// seed+1000 internally so it does not collide with the board shuffle).
 	session.TargetCandidate = s.boardGenerator.SelectTarget(availableCandidates, perSessionSeed)
@@ -155,6 +197,13 @@ func (s *sessionService) StartSession(ctx context.Context, teamID string) (*doma
 	// Save session
 	if err := s.dbStore.WriteSession(ctx, session); err != nil {
 		return nil, fmt.Errorf("failed to save session: %w", err)
+	}
+
+	// HP3: Register this session in the team's active-sessions set so the
+	// concurrent-session limit is enforced on subsequent StartSession calls.
+	// TTL matches the session TTL (24 h) so the set self-cleans on expiry.
+	if err := s.dbStore.AddActiveSession(ctx, teamID, sessionID); err != nil {
+		logging.Warn(ctx, "failed to add session to active sessions set", "error", err)
 	}
 
 	// If all characters were solved, clear the solved set in Redis so the team starts fresh.
@@ -220,8 +269,9 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 		return nil, fmt.Errorf("trait not found on target: %s", traitDef.TraitKey)
 	}
 
-	// Record the question
+	// Record the question and reveal the queried trait on the board
 	session.RecordQuestion(questionID)
+	session.RevealTrait(traitDef.TraitKey)
 	s.dbStore.WriteSession(ctx, session)
 
 	// M2: First Successful Question — awarded after the first non-degraded answer.
@@ -435,15 +485,30 @@ func (s *sessionService) Reveal(ctx context.Context, sessionID string) (*domain.
 
 	alreadyCompleted := session.Completed
 
+	// Restriction A: require at least 5 questions before reveal is available.
+	if !alreadyCompleted && session.GetQuestionsAskedCount() < 5 {
+		return nil, fmt.Errorf("must ask at least 5 questions before revealing")
+	}
+
 	// If not already completed, mark the session as completed.
 	// Preserve whether the session had a correct guess previously.
 	if !alreadyCompleted {
+		// Restriction B: apply a −500 point penalty for using reveal.
+		if err := s.dbStore.IncrementTeamScore(ctx, session.TeamID, -500); err != nil {
+			logging.Error(ctx, "failed to apply reveal penalty", "error", err)
+		}
 		session.MarkComplete(session.CorrectGuess)
 		_ = s.dbStore.WriteSession(ctx, session)
 
 		// Clear active session ID for the team using a targeted HSET to avoid
 		// clobbering concurrent Lua script updates to score/solves.
 		_ = s.dbStore.ClearActiveSession(ctx, session.TeamID)
+
+		// HP3: Remove this session from the team's active-sessions set so the
+		// concurrent-session slot is freed immediately on reveal.
+		if err := s.dbStore.RemoveActiveSession(ctx, session.TeamID, session.SessionID); err != nil {
+			logging.Error(ctx, "failed to remove session from active sessions set on reveal", "error", err)
+		}
 	}
 
 	logging.Info(ctx, "session revealed", "wasCompleted", alreadyCompleted)
@@ -480,5 +545,11 @@ func (s *sessionService) updateTeamStats(ctx context.Context, session *domain.Se
 	// Clear the active session ID so the team can start a new session.
 	if err := s.dbStore.ClearActiveSession(ctx, session.TeamID); err != nil {
 		logging.Error(ctx, "failed to clear active session", "error", err)
+	}
+
+	// HP3: Remove this session from the team's active-sessions set so the slot
+	// is freed immediately rather than waiting for the 24 h TTL.
+	if err := s.dbStore.RemoveActiveSession(ctx, session.TeamID, session.SessionID); err != nil {
+		logging.Error(ctx, "failed to remove session from active sessions set", "error", err)
 	}
 }

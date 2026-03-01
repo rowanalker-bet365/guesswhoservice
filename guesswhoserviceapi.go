@@ -120,7 +120,7 @@ func main() {
 
 	// Initialize handlers
 	sessionHandler := handler.NewSessionHandler(sessionService, traitCatalog)
-	traitHandler := handler.NewTraitHandler(traitCatalog, encryptionService, milestoneService, sessionService)
+	traitHandler := handler.NewTraitHandler(traitCatalog, milestoneService, sessionService)
 	clientHandler := handler.NewClientHandler(dbStore, encryptionService, characterCatalog, cfg.JWTSecret)
 	debugAPIKey := cfg.DebugAPIKey
 	debugHandler := handler.NewDebugHandler(dbStore, debugAPIKey)
@@ -160,7 +160,6 @@ func main() {
 	publicMux.HandleFunc("GET /sessions/{sessionId}/status", sessionHandler.Status)
 	publicMux.Handle("POST /sessions/{sessionId}/ask", rateLimiter.Limit(60, 5)(http.HandlerFunc(sessionHandler.AskQuestion)))
 	publicMux.HandleFunc("GET /sessions/{sessionId}/board", sessionHandler.GetBoard)
-	publicMux.HandleFunc("POST /sessions/{sessionId}/decode", traitHandler.Decode)
 	publicMux.HandleFunc("POST /sessions/{sessionId}/guess", sessionHandler.SubmitGuess)
 	publicMux.HandleFunc("POST /sessions/{sessionId}/reveal", sessionHandler.Reveal)
 
@@ -192,7 +191,6 @@ func main() {
 				"get_questions": "GET /sessions/{sessionId}/questions",
 				"session_status": "GET /sessions/{sessionId}/status",
 				"ask_question": "POST /sessions/{sessionId}/ask",
-				"decode": "POST /sessions/{sessionId}/decode",
 				"submit_guess": "POST /sessions/{sessionId}/guess",
 				"reveal": "POST /sessions/{sessionId}/reveal",
 				"leaderboard": "GET /leaderboard",
