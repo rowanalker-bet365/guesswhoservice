@@ -34,13 +34,14 @@ func classifyServiceError(err error, sessionID string, hints ...string) (int, AP
 			SessionID: sessionID,
 		}
 	case strings.Contains(msg, "enum trait requires a value"):
-		traitKey := ""
+		// L1: the hint passed here is req.QuestionID (not the trait key), so label it correctly.
+		questionID := ""
 		if len(hints) > 0 {
-			traitKey = hints[0]
+			questionID = hints[0]
 		}
 		return http.StatusBadRequest, APIError{
 			Error:   "value_required",
-			Message: "This trait is an enum type. You must specify the value you are asking about (e.g. {\"questionId\": \"T01\", \"value\": \"brown\"}). Trait: '" + traitKey + "'.",
+			Message: "This trait is an enum type. You must specify the value you are asking about (e.g. {\"questionId\": \"T01\", \"value\": \"brown\"}). Question ID: '" + questionID + "'.",
 		}
 	case strings.Contains(msg, "invalid question ID"):
 		questionID := ""

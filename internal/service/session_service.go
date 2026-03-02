@@ -294,9 +294,12 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 
 	// Stage 1 — Step 1: Roll for block (25% chance).
 	// If blocked, do NOT record the question and do NOT count it.
-	rollBytes := make([]byte, 1)
-	crand.Read(rollBytes)
-	if int(rollBytes[0])%100 < 25 {
+	// C2/W1: use unbiased threshold (64/256 = exactly 25%) and handle crand.Read error.
+	blockBytes := make([]byte, 1)
+	if _, err := crand.Read(blockBytes); err != nil {
+		// If crypto/rand is unavailable, log a warning and fall through (safe default: no block).
+		logging.Warn(ctx, "crypto/rand unavailable for block roll, skipping block", "error", err)
+	} else if int(blockBytes[0]) < 64 { // 64/256 = exactly 25%
 		logging.Debug(ctx, "trait blocked by Stage 1 filter", "questionId", questionID)
 		return &domain.TraitAnswer{
 			QuestionID: questionID,
@@ -306,42 +309,36 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 		}, nil
 	}
 
-	// Record the question and reveal the queried trait on the board (session-wide).
-	session.RecordQuestion(questionID)
-	session.RevealTrait(traitDef.TraitKey)
-
-	// Stage 1 — Step 2: Roll for encryption (40% chance).
+	// Stage 1 — Step 2: Determine encryption decision.
 	// The decision is stored per-questionID so repeated decode calls are consistent.
+	// L2: EncryptedQuestions is also used as the "already recorded" guard — if the
+	// questionID is already present the question was previously answered (non-blocked),
+	// so skip RecordQuestion to avoid double-counting.
 	shouldEncrypt := false
 	if decided, alreadyDecided := session.EncryptedQuestions[questionID]; alreadyDecided {
+		// Question was already asked and recorded — reuse the stored encryption decision.
 		shouldEncrypt = decided
 	} else {
-		crand.Read(rollBytes)
-		shouldEncrypt = int(rollBytes[0])%100 < 40 // 40% chance
+		// First time this question is answered (non-blocked): record it now.
+		session.RecordQuestion(questionID)
+		session.RevealTrait(traitDef.TraitKey)
+
+		// C2/W1: use unbiased threshold (102/256 ≈ 39.8%) and handle crand.Read error.
+		encRollBytes := make([]byte, 1)
+		if _, err := crand.Read(encRollBytes); err != nil {
+			// If crypto/rand is unavailable, log a warning and fall through (safe default: no encryption).
+			logging.Warn(ctx, "crypto/rand unavailable for encrypt roll, skipping encryption", "error", err)
+		} else {
+			shouldEncrypt = int(encRollBytes[0]) < 102 // 102/256 ≈ 39.8%
+		}
 		if session.EncryptedQuestions == nil {
 			session.EncryptedQuestions = make(map[string]bool)
 		}
 		session.EncryptedQuestions[questionID] = shouldEncrypt
 	}
 
-	// Persist all session mutations in a single write.
-	s.dbStore.WriteSession(ctx, session)
-
-	// Milestones are atomic via Lua script, safe to call without session lock concerns.
-	// M2: First Successful Question — awarded after the first non-degraded answer.
-	s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneM2)
-
-	// M3: Elimination Working — awarded when >= 3 questions have been asked in a session.
-	if session.GetQuestionsAskedCount() >= 3 {
-		s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneM3)
-	}
-
-	// S3: Resilience — awarded when a successful answer is received during an active chaos window.
-	if s.chaosService.IsInChaosWindow(session) {
-		s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneS3)
-	}
-
-	// Build response
+	// W4: Build the response (including the Encrypt call) BEFORE persisting the session
+	// and awarding milestones. If Encrypt fails the session state is not committed.
 	traitAnswer := &domain.TraitAnswer{
 		QuestionID: questionID,
 		TraitKey:   traitDef.TraitKey,
@@ -361,6 +358,26 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 		encFalse := false
 		traitAnswer.Encrypted = &encFalse
 		traitAnswer.Answer = &boolAnswer
+	}
+
+	// C1: Persist all session mutations in a single write; capture and propagate the error.
+	if err := s.dbStore.WriteSession(ctx, session); err != nil {
+		logging.Error(ctx, "failed to persist session after question", "error", err)
+		return nil, fmt.Errorf("failed to persist session: %w", err)
+	}
+
+	// Milestones are atomic via Lua script, safe to call without session lock concerns.
+	// M2: First Successful Question — awarded after the first non-degraded answer.
+	s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneM2)
+
+	// M3: Elimination Working — awarded when >= 3 questions have been asked in a session.
+	if session.GetQuestionsAskedCount() >= 3 {
+		s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneM3)
+	}
+
+	// S3: Resilience — awarded when a successful answer is received during an active chaos window.
+	if s.chaosService.IsInChaosWindow(session) {
+		s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneS3)
 	}
 
 	logging.Debug(ctx, "question answered", "questionId", questionID, "encrypted", shouldEncrypt, "cipher", session.EncryptCipher)
