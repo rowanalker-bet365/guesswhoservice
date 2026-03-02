@@ -40,7 +40,13 @@ func (s *scoringService) calculateQuestionBonus(session *domain.Session) int {
 	questionsAsked := session.GetQuestionsAskedCount()
 	bonus := 300 - (20 * questionsAsked)
 	if bonus < 0 {
-		bonus = 0
+		// Additional penalty for excessive questions beyond the bonus threshold
+		excessQuestions := questionsAsked - 15
+		if excessQuestions > 0 {
+			bonus = -(5 * excessQuestions) // -5 per question beyond 15
+		} else {
+			bonus = 0
+		}
 	}
 	return bonus
 }

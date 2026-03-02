@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -41,14 +42,20 @@ func (rl *RateLimiter) Limit(capacity, refillRate int) func(http.Handler) http.H
 				return
 			}
 
-			teamID := r.Header.Get("X-Team-Id")
-			if teamID == "" {
-				logging.Warn(r.Context(), "rate limit check failed - missing X-Team-Id")
-				http.Error(w, "X-Team-Id header required", http.StatusBadRequest)
-				return
+			// Use the authenticated team ID from the request context (set by the JWT
+			// auth middleware) when available. For unauthenticated requests that reach
+			// the rate limiter, fall back to the client IP so they are still limited.
+			teamID, ok := r.Context().Value(TeamIDKey).(string)
+			var key string
+			if ok && teamID != "" {
+				key = "team:" + teamID + ":" + r.URL.Path
+			} else {
+				ip, _, err := net.SplitHostPort(r.RemoteAddr)
+				if err != nil {
+					ip = r.RemoteAddr
+				}
+				key = "ip:" + ip + ":" + r.URL.Path
 			}
-
-			key := teamID + ":" + r.URL.Path
 
 			if !rl.allow(key, capacity, refillRate) {
 				logging.Warn(r.Context(), "rate limit exceeded", "teamId", teamID, "path", r.URL.Path)

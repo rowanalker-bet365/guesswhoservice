@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"math/rand"
 	"net/http"
 	"time"
 
@@ -47,6 +48,12 @@ func (h *SessionHandler) StartSession(w http.ResponseWriter, r *http.Request) {
 
 	session, err := h.sessionService.StartSession(r.Context(), teamID)
 	if err != nil {
+		if errors.Is(err, service.ErrTooManySessions) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"error":"too many active sessions, please wait for your current session to expire"}`))
+			return
+		}
 		logging.Error(r.Context(), "failed to start session", "error", err)
 		writeErrorJSON(w, http.StatusInternalServerError, APIError{
 			Error:   "session_creation_failed",
@@ -95,17 +102,24 @@ func (h *SessionHandler) GetBoard(w http.ResponseWriter, r *http.Request) {
 		defs = append(defs, def)
 	}
 
-	// Build the board: return the trait map for each position in the
-	// session's stored shuffled order, including the per-session fake
-	// candidateId. Never expose the real candidateId, name, or imagePath.
+	// Build the board: return each candidate's trait values filtered to only
+	// those in the initial visible subset or revealed via questions.
 	board := make([]map[string]interface{}, 0, len(session.Candidates))
 	for _, c := range session.Candidates {
-		entry := map[string]interface{}{
-			"traits": c.Traits,
-		}
+		entry := map[string]interface{}{}
 		if fakeID, ok := session.CandidateIDMapRev[c.CandidateID]; ok {
 			entry["candidateId"] = fakeID
+		} else {
+			entry["candidateId"] = c.CandidateID
 		}
+		// Only include traits in this candidate's initial subset or revealed session-wide via questions
+		visibleTraits := map[string]interface{}{}
+		for traitName, traitValue := range c.Traits {
+			if session.IsTraitVisibleForCandidate(c.CandidateID, traitName) {
+				visibleTraits[traitName] = traitValue
+			}
+		}
+		entry["traits"] = visibleTraits
 		board = append(board, entry)
 	}
 
@@ -124,6 +138,11 @@ func (h *SessionHandler) GetBoard(w http.ResponseWriter, r *http.Request) {
 // AskQuestionRequest represents a request to ask a question
 type AskQuestionRequest struct {
 	QuestionID string `json:"questionId"`
+	// Value is the specific value being asked about for enum traits.
+	// For boolean traits this field is ignored.
+	// For enum traits it is required; the response will be true if the
+	// target's trait value matches this value (case-insensitive).
+	Value string `json:"value,omitempty"`
 }
 
 // AskQuestion handles POST /sessions/{sessionId}/ask
@@ -140,7 +159,7 @@ func (h *SessionHandler) AskQuestion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	answer, err := h.sessionService.AskQuestion(r.Context(), sessionID, req.QuestionID)
+	answer, err := h.sessionService.AskQuestion(r.Context(), sessionID, req.QuestionID, req.Value)
 	if err != nil {
 		// Check for chaos-injected error first
 		var chaosErr *service.ChaosError
@@ -160,6 +179,10 @@ func (h *SessionHandler) AskQuestion(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logging.Info(r.Context(), "question answered", "questionId", req.QuestionID)
+
+	// Add timing jitter to prevent timing-based inference
+	jitter := time.Duration(rand.Intn(151)+50) * time.Millisecond
+	time.Sleep(jitter)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(answer)
@@ -237,7 +260,6 @@ func (h *SessionHandler) SubmitGuess(w http.ResponseWriter, r *http.Request) {
 	// Failure response with dynamic session state
 	response := map[string]interface{}{
 		"correct":          false,
-		"penalty":          -200,
 		"sessionEnded":     session.Completed,
 		"guessesRemaining": session.GuessesRemaining,
 		"guessedCount":     session.GetGuessedCount(),

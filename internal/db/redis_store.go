@@ -504,6 +504,31 @@ func (s *Store) GetMasterboardFromSets(ctx context.Context) (map[string][]string
 	return result, nil
 }
 
+// CountActiveSessions returns the number of session IDs currently tracked in the
+// team's active-sessions set (key: "active_sessions:team:<teamID>").
+func (s *Store) CountActiveSessions(ctx context.Context, teamID string) (int64, error) {
+	key := "active_sessions:team:" + teamID
+	return s.client.SCard(ctx, key).Result()
+}
+
+// AddActiveSession adds sessionID to the team's active-sessions set and refreshes
+// the set's TTL to match the session TTL (24 h).
+func (s *Store) AddActiveSession(ctx context.Context, teamID, sessionID string) error {
+	key := "active_sessions:team:" + teamID
+	pipe := s.client.Pipeline()
+	pipe.SAdd(ctx, key, sessionID)
+	pipe.Expire(ctx, key, 24*time.Hour)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// RemoveActiveSession removes sessionID from the team's active-sessions set.
+// Called when a session ends (correct guess, reveal, or exhausted guesses).
+func (s *Store) RemoveActiveSession(ctx context.Context, teamID, sessionID string) error {
+	key := "active_sessions:team:" + teamID
+	return s.client.SRem(ctx, key, sessionID).Err()
+}
+
 // FlushAll deletes every key in the current Redis database.
 // Use this to wipe all data before a fresh hackathon run.
 func (s *Store) FlushAll(ctx context.Context) error {

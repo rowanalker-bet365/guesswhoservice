@@ -23,29 +23,31 @@ type ChaosProfile struct {
 
 // Session represents a game session
 type Session struct {
-	SessionID         string            `json:"sessionId"`
-	TeamID            string            `json:"teamId"`
-	BoardSize         int               `json:"boardSize"`
-	TraitsAvailable   int               `json:"traitsAvailable"`
-	GuessLimit        int               `json:"guessLimit"`
-	ChaosProfile      ChaosProfile      `json:"chaosProfile"`
-	Candidates        []*Candidate      `json:"candidates"`
-	TargetCandidate   *Candidate        `json:"targetCandidate"`
-	Seed              int64             `json:"seed"`
-	CreatedAt         time.Time         `json:"createdAt"`
-	QuestionsAsked    []string          `json:"questionsAsked"`
-	FailedRequests    int               `json:"failedRequests"`
-	Timeouts          int               `json:"timeouts"`
-	Unhandled5xx      int               `json:"unhandled5xx"`
-	GuessesRemaining  int               `json:"guessesRemaining"`
-	Completed         bool              `json:"completed"`
-	CorrectGuess      bool              `json:"correctGuess"`
-	GuessedCandidates map[string]bool   `json:"guessedCandidates"`
-	CandidateIDMap    map[string]string `json:"candidateIdMap"`    // fakeID -> realID
-	CandidateIDMapRev map[string]string `json:"candidateIdMapRev"` // realID -> fakeID
-	EncryptKey        string            `json:"encryptKey"`
-	EncryptCipher      string            `json:"encryptCipher"`
-	EncryptedQuestions map[string]bool   `json:"encryptedQuestions"`
+	SessionID             string              `json:"sessionId"`
+	TeamID                string              `json:"teamId"`
+	BoardSize             int                 `json:"boardSize"`
+	TraitsAvailable       int                 `json:"traitsAvailable"`
+	GuessLimit            int                 `json:"guessLimit"`
+	ChaosProfile          ChaosProfile        `json:"chaosProfile"`
+	Candidates            []*Candidate        `json:"candidates"`
+	TargetCandidate       *Candidate          `json:"targetCandidate"`
+	Seed                  int64               `json:"-"` // never expose to clients
+	CreatedAt             time.Time           `json:"createdAt"`
+	QuestionsAsked        []string            `json:"questionsAsked"`
+	FailedRequests        int                 `json:"failedRequests"`
+	Timeouts              int                 `json:"timeouts"`
+	Unhandled5xx          int                 `json:"unhandled5xx"`
+	GuessesRemaining      int                 `json:"guessesRemaining"`
+	Completed             bool                `json:"completed"`
+	CorrectGuess          bool                `json:"correctGuess"`
+	GuessedCandidates     map[string]bool     `json:"guessedCandidates"`
+	CandidateIDMap        map[string]string   `json:"candidateIdMap"`    // fakeID -> realID
+	CandidateIDMapRev     map[string]string   `json:"candidateIdMapRev"` // realID -> fakeID
+	EncryptKey            string              `json:"encryptKey"`
+	EncryptCipher         string              `json:"encryptCipher"`
+	EncryptedQuestions    map[string]bool     `json:"encryptedQuestions"`
+	CandidateTraitSubsets map[string][]string `json:"candidateTraitSubsets"` // per-candidate initial visible trait keys
+	RevealedTraits        []string            `json:"revealedTraits"`        // trait names unlocked via questions (session-wide)
 }
 
 // NewSession creates a new game session
@@ -65,22 +67,24 @@ func NewSession(sessionID, teamID string, guessLimit int, seed int64, chaos Chao
 	encryptCipher := ciphers[int(idxBytes[0])%len(ciphers)]
 
 	return &Session{
-		SessionID:         sessionID,
-		TeamID:            teamID,
-		BoardSize:         64,
-		TraitsAvailable:   64,
-		GuessLimit:        guessLimit,
-		ChaosProfile:      chaos,
-		Seed:              seed,
-		CreatedAt:         time.Now(),
-		QuestionsAsked:    make([]string, 0),
-		GuessesRemaining:  guessLimit,
-		Completed:         false,
-		CorrectGuess:      false,
-		GuessedCandidates: make(map[string]bool),
-		EncryptKey:         encryptKey,
-		EncryptCipher:      encryptCipher,
-		EncryptedQuestions: make(map[string]bool),
+		SessionID:             sessionID,
+		TeamID:                teamID,
+		BoardSize:             64,
+		TraitsAvailable:       64,
+		GuessLimit:            guessLimit,
+		ChaosProfile:          chaos,
+		Seed:                  seed,
+		CreatedAt:             time.Now(),
+		QuestionsAsked:        make([]string, 0),
+		GuessesRemaining:      guessLimit,
+		Completed:             false,
+		CorrectGuess:          false,
+		GuessedCandidates:     make(map[string]bool),
+		EncryptKey:            encryptKey,
+		EncryptCipher:         encryptCipher,
+		EncryptedQuestions:    make(map[string]bool),
+		CandidateTraitSubsets: make(map[string][]string),
+		RevealedTraits:        make([]string, 0),
 	}
 }
 
@@ -143,4 +147,34 @@ func (s *Session) GetElapsedTime() int {
 // GetQuestionsAskedCount returns the number of questions asked
 func (s *Session) GetQuestionsAskedCount() int {
 	return len(s.QuestionsAsked)
+}
+
+// IsTraitVisibleForCandidate returns true if the given trait name is in that
+// candidate's initial subset or has been revealed session-wide via a question.
+func (s *Session) IsTraitVisibleForCandidate(candidateID, traitName string) bool {
+	// Legacy sessions (created before HP3) have no subset map — show all traits.
+	if s.CandidateTraitSubsets == nil {
+		return true
+	}
+	for _, t := range s.CandidateTraitSubsets[candidateID] {
+		if t == traitName {
+			return true
+		}
+	}
+	for _, t := range s.RevealedTraits {
+		if t == traitName {
+			return true
+		}
+	}
+	return false
+}
+
+// RevealTrait adds a trait name to RevealedTraits if not already present.
+func (s *Session) RevealTrait(traitName string) {
+	for _, t := range s.RevealedTraits {
+		if t == traitName {
+			return
+		}
+	}
+	s.RevealedTraits = append(s.RevealedTraits, traitName)
 }

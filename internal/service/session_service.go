@@ -2,9 +2,12 @@ package service
 
 import (
 	"context"
-	cryptorand "crypto/rand"
+	crand "crypto/rand"
+	"encoding/binary"
+	"errors"
 	"fmt"
-	"hash/fnv"
+	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -14,11 +17,15 @@ import (
 	"github.com/guesswho/internal/logging"
 )
 
+// ErrTooManySessions is returned by StartSession when a team already has the
+// maximum number of concurrent active sessions (2).
+var ErrTooManySessions = errors.New("too many active sessions for this team")
+
 // SessionService manages game sessions
 type SessionService interface {
 	StartSession(ctx context.Context, teamID string) (*domain.Session, error)
 	GetSession(ctx context.Context, sessionID string) (*domain.Session, error)
-	AskQuestion(ctx context.Context, sessionID string, questionID string) (*domain.TraitAnswer, error)
+	AskQuestion(ctx context.Context, sessionID string, questionID string, value string) (*domain.TraitAnswer, error)
 	SubmitGuess(ctx context.Context, sessionID string, candidateID string) (*domain.GuessResult, error)
 	Reveal(ctx context.Context, sessionID string) (*domain.RevealResult, error)
 }
@@ -68,19 +75,32 @@ func NewSessionService(
 	}
 }
 
-// sessionShuffleSeed derives a deterministic per-session seed from the sessionID.
-func sessionShuffleSeed(sessionID string) int64 {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(sessionID))
-	return int64(h.Sum64())
+// generateRandomSeed returns a cryptographically random int64 seed.
+// Falls back to time.Now().UnixNano() if the OS entropy source is unavailable,
+// which is still not predictable from the session ID.
+func generateRandomSeed() int64 {
+	var b [8]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		return time.Now().UnixNano()
+	}
+	return int64(binary.LittleEndian.Uint64(b[:]))
 }
 
 func (s *sessionService) StartSession(ctx context.Context, teamID string) (*domain.Session, error) {
+	// HP3: Enforce per-team concurrent session limit (max 2 active sessions).
+	count, err := s.dbStore.CountActiveSessions(ctx, teamID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check active sessions: %w", err)
+	}
+	if count >= 2 {
+		return nil, ErrTooManySessions
+	}
+
 	sessionID := fmt.Sprintf("s_%s", uuid.New().String()[:8])
 
-	// Derive a unique seed from the session ID so that every session gets a
-	// different board order and target character.
-	perSessionSeed := sessionShuffleSeed(sessionID)
+	// Generate a cryptographically random seed so that the board order and
+	// target character cannot be predicted from the session ID.
+	perSessionSeed := generateRandomSeed()
 
 	chaosProfile := domain.ChaosProfile{
 		Mode:            domain.ChaosModeScheduled,
@@ -103,7 +123,6 @@ func (s *sessionService) StartSession(ctx context.Context, teamID string) (*doma
 		return nil, fmt.Errorf("failed to read team data: %w", err)
 	}
 	if err == redis.Nil {
-		// Should not happen if team is registered, but handle gracefully
 		teamData = &db.TeamData{}
 	}
 
@@ -128,12 +147,9 @@ func (s *sessionService) StartSession(ctx context.Context, teamID string) (*doma
 		availableCandidates = candidates
 	}
 
-	// GenerateBoard already shuffled the candidates with perSessionSeed, so
-	// session.Candidates is already in a unique per-session order.
 	session.Candidates = availableCandidates
 
 	// Generate per-session fake ID mapping for anti-cheat.
-	// Fake IDs (P01, P02, ...) correspond to the shuffled board positions.
 	candidateIDMap := make(map[string]string, len(availableCandidates))
 	candidateIDMapRev := make(map[string]string, len(availableCandidates))
 	for i, c := range availableCandidates {
@@ -144,8 +160,28 @@ func (s *sessionService) StartSession(ctx context.Context, teamID string) (*doma
 	session.CandidateIDMap = candidateIDMap
 	session.CandidateIDMapRev = candidateIDMapRev
 
-	// Select a random target using the per-session seed (SelectTarget uses
-	// seed+1000 internally so it does not collide with the board shuffle).
+	// For each candidate, independently shuffle all trait keys and assign a
+	// unique random 20-trait visible subset.
+	allTraitDefs := s.traitCatalog.GetAllTraits()
+	baseTraitKeys := make([]string, len(allTraitDefs))
+	for i, td := range allTraitDefs {
+		baseTraitKeys[i] = td.TraitKey
+	}
+	subsetSize := 20
+	if len(baseTraitKeys) < subsetSize {
+		subsetSize = len(baseTraitKeys)
+	}
+	rng := rand.New(rand.NewSource(perSessionSeed))
+	candidateTraitSubsets := make(map[string][]string, len(availableCandidates))
+	for _, c := range availableCandidates {
+		shuffled := make([]string, len(baseTraitKeys))
+		copy(shuffled, baseTraitKeys)
+		rng.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
+		candidateTraitSubsets[c.CandidateID] = shuffled[:subsetSize]
+	}
+	session.CandidateTraitSubsets = candidateTraitSubsets
+
+	// Select a random target using the per-session seed.
 	session.TargetCandidate = s.boardGenerator.SelectTarget(availableCandidates, perSessionSeed)
 
 	if session.TargetCandidate == nil {
@@ -157,15 +193,19 @@ func (s *sessionService) StartSession(ctx context.Context, teamID string) (*doma
 		return nil, fmt.Errorf("failed to save session: %w", err)
 	}
 
-	// If all characters were solved, clear the solved set in Redis so the team starts fresh.
+	// HP3: Register this session in the team's active-sessions set.
+	if err := s.dbStore.AddActiveSession(ctx, teamID, sessionID); err != nil {
+		logging.Warn(ctx, "failed to add session to active sessions set", "error", err)
+	}
+
+	// If all characters were solved, clear the solved set in Redis.
 	if resetOccurred {
 		if err := s.dbStore.ClearSolvedCharacters(ctx, teamID); err != nil {
 			logging.Warn(ctx, "failed to clear solved characters", "error", err)
 		}
 	}
 
-	// Set the active session ID using a targeted HSET — do NOT use WriteTeamData here,
-	// as that would overwrite score/solves/solved-characters with the stale snapshot.
+	// Set the active session ID using a targeted HSET.
 	if err := s.dbStore.SetActiveSession(ctx, teamID, sessionID); err != nil {
 		return nil, fmt.Errorf("failed to update active session for team %s: %w", teamID, err)
 	}
@@ -187,7 +227,18 @@ func (s *sessionService) GetSession(ctx context.Context, sessionID string) (*dom
 	return s.dbStore.ReadSession(ctx, sessionID)
 }
 
-func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, questionID string) (*domain.TraitAnswer, error) {
+// AskQuestion processes a trait question for the given session.
+//
+// For boolean traits, value is ignored and the answer is the trait's boolean value.
+// For enum/numeric traits, value must be provided; the answer is true if the
+// target's trait value matches value (case-insensitive), false otherwise.
+//
+// Stage 1 flow:
+//  1. Roll for block (25%) — if blocked, return a blocked response without recording the question.
+//  2. Record the question and reveal the trait on the board.
+//  3. Roll for encryption (40%) — if encrypted, return ciphertext + cipherType.
+//  4. Otherwise return the plain boolean answer.
+func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, questionID string, value string) (*domain.TraitAnswer, error) {
 	logging.Debug(ctx, "processing question", "questionId", questionID)
 
 	lockValue, err := s.dbStore.AcquireSessionLock(ctx, sessionID)
@@ -211,11 +262,15 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 		return nil, fmt.Errorf("invalid question ID: %s", questionID)
 	}
 
+	// Enum traits require the player to specify the value they are asking about.
+	if traitDef.Type == domain.TraitTypeEnum && value == "" {
+		return nil, fmt.Errorf("enum trait requires a value: specify the value you are asking about for trait '%s'", traitDef.TraitKey)
+	}
+
 	// Check for chaos/failure injection — returns a ChaosError (real HTTP error)
 	if s.chaosService.ShouldFail(session) {
 		session.IncrementFailure("failed")
 		s.dbStore.WriteSession(ctx, session)
-
 		logging.Info(ctx, "chaos: injecting failure", "questionId", questionID)
 		return nil, s.chaosService.GetChaosError()
 	}
@@ -226,37 +281,57 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 		return nil, fmt.Errorf("trait not found on target: %s", traitDef.TraitKey)
 	}
 
-	// Record the question
-	session.RecordQuestion(questionID)
+	// Convert the raw trait value to a boolean answer.
+	var boolAnswer bool
+	switch traitDef.Type {
+	case domain.TraitTypeBoolean:
+		boolAnswer, _ = answer.(bool)
+	default:
+		// enum or numeric: player asked "is it <value>?"
+		actualValue := fmt.Sprintf("%v", answer)
+		boolAnswer = strings.EqualFold(actualValue, value)
+	}
 
-	// Determine if this response should be encrypted.
-	// Decision is deterministic per questionID per session — once decided, it never changes.
+	// Stage 1 — Step 1: Roll for block (25% chance).
+	// If blocked, do NOT record the question and do NOT count it.
+	rollBytes := make([]byte, 1)
+	crand.Read(rollBytes)
+	if int(rollBytes[0])%100 < 25 {
+		logging.Debug(ctx, "trait blocked by Stage 1 filter", "questionId", questionID)
+		return &domain.TraitAnswer{
+			QuestionID: questionID,
+			TraitKey:   traitDef.TraitKey,
+			Blocked:    true,
+			Message:    "This trait is classified. You are not permitted to know this value.",
+		}, nil
+	}
+
+	// Record the question and reveal the queried trait on the board (session-wide).
+	session.RecordQuestion(questionID)
+	session.RevealTrait(traitDef.TraitKey)
+
+	// Stage 1 — Step 2: Roll for encryption (40% chance).
+	// The decision is stored per-questionID so repeated decode calls are consistent.
 	shouldEncrypt := false
-	if decided, exists := session.EncryptedQuestions[questionID]; exists {
-		// Already decided for this question in this session
+	if decided, alreadyDecided := session.EncryptedQuestions[questionID]; alreadyDecided {
 		shouldEncrypt = decided
 	} else {
-		// First question in the session (before RecordQuestion was called above) is never encrypted.
-		// QuestionsAsked already includes this question (recorded above), so count > 1 means not first.
-		if len(session.QuestionsAsked) > 1 {
-			rollBytes := make([]byte, 1)
-			cryptorand.Read(rollBytes)
-			shouldEncrypt = int(rollBytes[0])%100 >= 60 // ~40% chance of encryption
-		}
+		crand.Read(rollBytes)
+		shouldEncrypt = int(rollBytes[0])%100 < 40 // 40% chance
 		if session.EncryptedQuestions == nil {
 			session.EncryptedQuestions = make(map[string]bool)
 		}
 		session.EncryptedQuestions[questionID] = shouldEncrypt
 	}
 
-	// Single write for all session mutations
+	// Persist all session mutations in a single write.
 	s.dbStore.WriteSession(ctx, session)
 
-	// Milestones are atomic via Lua script, safe to call without session lock concerns
+	// Milestones are atomic via Lua script, safe to call without session lock concerns.
 	// M2: First Successful Question — awarded after the first non-degraded answer.
 	s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneM2)
 
-	// M3: Elimination Working — awarded when ≥ 3 questions have been asked in a session.
+	// M3: Elimination Working — awarded when >= 3 questions have been asked in a session.
 	if session.GetQuestionsAskedCount() >= 3 {
 		s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneM3)
 	}
@@ -273,18 +348,22 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 	}
 
 	if shouldEncrypt {
-		plaintext := fmt.Sprintf("%v", answer)
+		plaintext := fmt.Sprintf("%v", boolAnswer)
 		encrypted, err := s.encryptionService.Encrypt(plaintext, session.EncryptCipher, session.EncryptKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to encrypt answer: %w", err)
 		}
-		traitAnswer.Answer = encrypted
-		traitAnswer.Status = "encrypted"
+		encTrue := true
+		traitAnswer.Encrypted = &encTrue
+		traitAnswer.Ciphertext = encrypted
+		traitAnswer.CipherType = session.EncryptCipher
 	} else {
-		traitAnswer.Answer = answer
+		encFalse := false
+		traitAnswer.Encrypted = &encFalse
+		traitAnswer.Answer = &boolAnswer
 	}
 
-	logging.Debug(ctx, "question answered", "questionId", questionID, "cipher", session.EncryptCipher)
+	logging.Debug(ctx, "question answered", "questionId", questionID, "encrypted", shouldEncrypt, "cipher", session.EncryptCipher)
 
 	return traitAnswer, nil
 }
@@ -360,24 +439,19 @@ func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, cand
 	}
 
 	// Update session state
-	//  - Track unique candidates guessed
-	//  - Only decrement failed guesses on wrong guesses
 	session.RecordGuess(realCandidateID)
 	if correct {
 		session.CorrectGuess = true
-		// Mark session as complete immediately on correct guess
 		session.MarkComplete(true)
 	} else {
-		// Wrong guess: apply -200 penalty immediately, regardless of whether the session ends.
+		// Wrong guess: apply -200 penalty immediately.
 		if err := s.dbStore.IncrementTeamScore(ctx, session.TeamID, -200); err != nil {
 			logging.Error(ctx, "failed to apply wrong-guess penalty", "error", err)
 		}
 		session.DecrementGuess()
 	}
 
-	// End session if:
-	//  - All candidates have been guessed, or
-	//  - Allowed failed guesses are exhausted
+	// End session if all candidates have been guessed or guesses are exhausted
 	if !session.Completed && (session.GuessesRemaining <= 0 || session.GetGuessedCount() >= len(session.Candidates)) {
 		session.MarkComplete(false)
 	}
@@ -388,14 +462,10 @@ func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, cand
 	// Record on leaderboard only when the session actually ends
 	if session.Completed {
 		finalCorrect := session.CorrectGuess
-		// Reuse the score already computed above to avoid a second CalculateScore call
-		// (calculateTimeBonus uses time.Since, so two calls return different values).
 		finalScore := 0
 		if finalCorrect {
 			finalScore = totalScore
 		}
-
-		// Update team stats including solved characters and clearing active session
 		s.updateTeamStats(ctx, session, finalScore, finalCorrect, realCandidateID)
 	}
 
@@ -404,7 +474,7 @@ func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, cand
 		// M4: First Correct Solve — awarded on the first correct guess.
 		s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneM4)
 
-		// S1: Efficiency — awarded when a character is solved with ≤ 10 questions.
+		// S1: Efficiency — awarded when a character is solved with <= 10 questions.
 		if session.GetQuestionsAskedCount() <= 10 {
 			s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneS1)
 		}
@@ -417,14 +487,12 @@ func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, cand
 		}
 	}
 
-	// Publish an update now that all data is persisted, regardless of guess correctness.
+	// Publish an update now that all data is persisted.
 	if correct {
-		// For a correct guess, include the solved character ID.
 		if err := s.dbStore.PublishGameUpdate(ctx, session.TeamID, realCandidateID); err != nil {
 			logging.Error(ctx, "failed to publish game update", "error", err)
 		}
 	} else {
-		// For an incorrect guess, send a generic update to trigger a client refetch.
 		if err := s.dbStore.PublishGameUpdate(ctx, session.TeamID, ""); err != nil {
 			logging.Error(ctx, "failed to publish game update", "error", err)
 		}
@@ -432,7 +500,6 @@ func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, cand
 
 	logging.Info(ctx, "guess submitted", "fakeId", candidateID, "realId", realCandidateID, "correct", correct, "score", totalScore, "guessesRemaining", session.GuessesRemaining)
 
-	// Build per-guess result
 	result := &domain.GuessResult{
 		Correct:   correct,
 		Score:     totalScore,
@@ -469,15 +536,26 @@ func (s *sessionService) Reveal(ctx context.Context, sessionID string) (*domain.
 
 	alreadyCompleted := session.Completed
 
+	// Restriction A: require at least 5 questions before reveal is available.
+	if !alreadyCompleted && session.GetQuestionsAskedCount() < 5 {
+		return nil, fmt.Errorf("must ask at least 5 questions before revealing")
+	}
+
 	// If not already completed, mark the session as completed.
-	// Preserve whether the session had a correct guess previously.
 	if !alreadyCompleted {
+		// Restriction B: apply a -500 point penalty for using reveal.
+		if err := s.dbStore.IncrementTeamScore(ctx, session.TeamID, -500); err != nil {
+			logging.Error(ctx, "failed to apply reveal penalty", "error", err)
+		}
 		session.MarkComplete(session.CorrectGuess)
 		_ = s.dbStore.WriteSession(ctx, session)
 
-		// Clear active session ID for the team using a targeted HSET to avoid
-		// clobbering concurrent Lua script updates to score/solves.
 		_ = s.dbStore.ClearActiveSession(ctx, session.TeamID)
+
+		// HP3: Remove this session from the team's active-sessions set.
+		if err := s.dbStore.RemoveActiveSession(ctx, session.TeamID, session.SessionID); err != nil {
+			logging.Error(ctx, "failed to remove session from active sessions set on reveal", "error", err)
+		}
 	}
 
 	logging.Info(ctx, "session revealed", "wasCompleted", alreadyCompleted)
@@ -519,10 +597,14 @@ func (s *sessionService) updateTeamStats(ctx context.Context, session *domain.Se
 			logging.Error(ctx, "failed to update fastest solve", "error", err)
 		}
 	}
-	// Wrong-guess penalties are applied immediately in SubmitGuess, not here.
 
 	// Clear the active session ID so the team can start a new session.
 	if err := s.dbStore.ClearActiveSession(ctx, session.TeamID); err != nil {
 		logging.Error(ctx, "failed to clear active session", "error", err)
+	}
+
+	// HP3: Remove this session from the team's active-sessions set.
+	if err := s.dbStore.RemoveActiveSession(ctx, session.TeamID, session.SessionID); err != nil {
+		logging.Error(ctx, "failed to remove session from active sessions set", "error", err)
 	}
 }

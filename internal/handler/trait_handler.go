@@ -12,18 +12,23 @@ import (
 // TraitHandler handles trait-related HTTP requests
 type TraitHandler struct {
 	traitCatalog      service.TraitCatalogService
-	encryptionService service.EncryptionService
 	milestoneService  service.MilestoneService
 	sessionService    service.SessionService
+	encryptionService service.EncryptionService
 }
 
 // NewTraitHandler creates a new trait handler
-func NewTraitHandler(traitCatalog service.TraitCatalogService, encryptionService service.EncryptionService, milestoneService service.MilestoneService, sessionService service.SessionService) *TraitHandler {
+func NewTraitHandler(
+	traitCatalog service.TraitCatalogService,
+	milestoneService service.MilestoneService,
+	sessionService service.SessionService,
+	encryptionService service.EncryptionService,
+) *TraitHandler {
 	return &TraitHandler{
 		traitCatalog:      traitCatalog,
-		encryptionService: encryptionService,
 		milestoneService:  milestoneService,
 		sessionService:    sessionService,
+		encryptionService: encryptionService,
 	}
 }
 
