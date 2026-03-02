@@ -24,10 +24,23 @@ type TraitValue struct {
 	Value interface{} `json:"value"`
 }
 
-// TraitAnswer represents an answer to a trait question
+// TraitAnswer represents an answer to a trait question.
+// The shape of the response depends on whether the answer is blocked, encrypted, or plain.
+//
+// Blocked:   {"questionId":"..","traitKey":"..","blocked":true,"message":".."}
+// Encrypted: {"questionId":"..","traitKey":"..","encrypted":true,"ciphertext":"..","cipherType":".."}
+// Plain:     {"questionId":"..","traitKey":"..","encrypted":false,"answer":true}
 type TraitAnswer struct {
-	QuestionID string      `json:"questionId"`
-	TraitKey   string      `json:"traitKey"`
-	Answer     interface{} `json:"answer"`
-	Status     string      `json:"status,omitempty"`
+	QuestionID string `json:"questionId"`
+	TraitKey   string `json:"traitKey"`
+
+	// Blocked response fields
+	Blocked bool   `json:"blocked,omitempty"`
+	Message string `json:"message,omitempty"`
+
+	// Encrypted/plain response fields (nil for blocked responses)
+	Encrypted  *bool  `json:"encrypted,omitempty"`
+	Ciphertext string `json:"ciphertext,omitempty"`
+	CipherType string `json:"cipherType,omitempty"`
+	Answer     *bool  `json:"answer,omitempty"`
 }

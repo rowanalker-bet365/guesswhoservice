@@ -7,17 +7,19 @@ import (
 
 	"github.com/guesswho/internal/db"
 	"github.com/guesswho/internal/logging"
+	"github.com/guesswho/internal/service"
 )
 
 // DebugHandler handles debug endpoints for development-time Redis inspection.
 type DebugHandler struct {
-	store  *db.Store
-	apiKey string
+	store             *db.Store
+	apiKey            string
+	encryptionService service.EncryptionService
 }
 
 // NewDebugHandler creates a new DebugHandler.
-func NewDebugHandler(store *db.Store, apiKey string) *DebugHandler {
-	return &DebugHandler{store: store, apiKey: apiKey}
+func NewDebugHandler(store *db.Store, apiKey string, encryptionService service.EncryptionService) *DebugHandler {
+	return &DebugHandler{store: store, apiKey: apiKey, encryptionService: encryptionService}
 }
 
 // authorize checks the X-Debug-Key header against the configured API key.
@@ -127,5 +129,59 @@ func (h *DebugHandler) FlushAll(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":  "ok",
 		"message": "All Redis data has been flushed. Ready for a fresh run.",
+	})
+}
+
+// DecryptHandler handles POST /debug/decrypt.
+// It decrypts a ciphertext using the specified cipher type and key.
+func (h *DebugHandler) DecryptHandler(w http.ResponseWriter, r *http.Request) {
+	if !h.authorize(w, r) {
+		return
+	}
+
+	var req struct {
+		Ciphertext string `json:"ciphertext"`
+		CipherType string `json:"cipherType"`
+		KeyHex     string `json:"keyHex"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, APIError{
+			Error:   "invalid_request",
+			Message: "Invalid JSON body: " + err.Error(),
+		})
+		return
+	}
+
+	if req.Ciphertext == "" {
+		writeErrorJSON(w, http.StatusBadRequest, APIError{
+			Error:   "missing_field",
+			Message: "Field 'ciphertext' is required.",
+			Field:   "ciphertext",
+		})
+		return
+	}
+	if req.CipherType == "" {
+		writeErrorJSON(w, http.StatusBadRequest, APIError{
+			Error:   "missing_field",
+			Message: "Field 'cipherType' is required.",
+			Field:   "cipherType",
+		})
+		return
+	}
+
+	plaintext, err := h.encryptionService.Decrypt(req.Ciphertext, req.CipherType, req.KeyHex)
+	if err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, APIError{
+			Error:   "decrypt_failed",
+			Message: err.Error(),
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"plaintext":  plaintext,
+		"cipherType": req.CipherType,
 	})
 }

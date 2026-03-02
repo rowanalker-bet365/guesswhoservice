@@ -25,10 +25,12 @@ type bucket struct {
 
 // NewRateLimiter creates a new rate limiter middleware
 func NewRateLimiter(enabled bool) *RateLimiter {
-	return &RateLimiter{
+	rl := &RateLimiter{
 		enabled: enabled,
 		buckets: make(map[string]*bucket),
 	}
+	go rl.cleanupLoop()
+	return rl
 }
 
 // Limit returns a middleware that enforces rate limiting
@@ -101,4 +103,20 @@ func (rl *RateLimiter) allow(key string, capacity, refillRate int) bool {
 	}
 
 	return false
+}
+
+// cleanupLoop periodically evicts stale rate limiter buckets to prevent unbounded memory growth.
+func (rl *RateLimiter) cleanupLoop() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		rl.mu.Lock()
+		now := time.Now()
+		for key, b := range rl.buckets {
+			if now.Sub(b.lastRefill) > 10*time.Minute {
+				delete(rl.buckets, key)
+			}
+		}
+		rl.mu.Unlock()
+	}
 }

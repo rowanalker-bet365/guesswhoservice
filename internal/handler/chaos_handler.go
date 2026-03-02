@@ -50,7 +50,9 @@ func (h *ChaosHandler) TriggerChaos(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Enabled bool `json:"enabled"`
+		Enabled         bool `json:"enabled"`
+		WindowSeconds   int  `json:"windowSeconds,omitempty"`
+		IntervalSeconds int  `json:"intervalSeconds,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -64,10 +66,18 @@ func (h *ChaosHandler) TriggerChaos(w http.ResponseWriter, r *http.Request) {
 
 	if req.Enabled {
 		h.chaosService.Enable()
-		logging.Warn(r.Context(), "chaos mode ACTIVATED via trigger")
+		logging.Info(r.Context(), "chaos mode ACTIVATED via trigger")
 	} else {
 		h.chaosService.Disable()
-		logging.Warn(r.Context(), "chaos mode DEACTIVATED via trigger")
+		logging.Info(r.Context(), "chaos mode DEACTIVATED via trigger")
+	}
+
+	if req.WindowSeconds > 0 || req.IntervalSeconds > 0 {
+		h.chaosService.SetWindowConfig(req.WindowSeconds, req.IntervalSeconds)
+		logging.Info(r.Context(), "chaos window config updated",
+			"windowSeconds", req.WindowSeconds,
+			"intervalSeconds", req.IntervalSeconds,
+		)
 	}
 
 	windowSeconds, intervalSeconds := h.chaosService.GetWindowConfig()

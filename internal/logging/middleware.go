@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,26 @@ import (
 )
 
 var sessionIDPattern = regexp.MustCompile(`sessions/(s_[^/]+)`)
+
+// requestMeta holds mutable per-request flags that handlers can set and the
+// logging middleware reads back after the handler returns. It is stored as a
+// pointer in the request context so mutations in the handler (which may be
+// behind wrapping middlewares like http.TimeoutHandler) are visible to the
+// logging middleware.
+type requestMeta struct {
+	chaosInjected bool
+}
+
+type requestMetaKey struct{}
+
+// MarkChaosInjected flags the current request as a chaos-injected failure so
+// the logging middleware logs it at Info level instead of Error/Warn.
+// Must be called with the http.Request from the handler.
+func MarkChaosInjected(r *http.Request) {
+	if meta, ok := r.Context().Value(requestMetaKey{}).(*requestMeta); ok {
+		meta.chaosInjected = true
+	}
+}
 
 // HTTPMiddleware returns HTTP middleware that creates a request-scoped logger
 // with trace, request ID, and other contextual fields, and logs request
@@ -76,6 +97,8 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 		// Create request-scoped logger and inject into context
 		logger := slog.Default().With(attrs...)
 		ctx := WithLogger(r.Context(), logger)
+		meta := &requestMeta{}
+		ctx = context.WithValue(ctx, requestMetaKey{}, meta)
 		r = r.WithContext(ctx)
 
 		// Wrap response writer to capture status code and bytes
@@ -88,7 +111,7 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 		defer func() {
 			if rec := recover(); rec != nil {
 				stack := string(debug.Stack())
-				logger.Error("request completed",
+				logger.Error("request panicked",
 					"panic", fmt.Sprintf("%v", rec),
 					"stack", stack,
 					FieldStatusCode, http.StatusInternalServerError,
@@ -110,6 +133,9 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 		}
 
 		switch {
+		case meta.chaosInjected:
+			logAttrs = append(logAttrs, "chaos", true)
+			logger.Info("request completed", logAttrs...)
 		case rw.statusCode >= 500:
 			logger.Error("request completed", logAttrs...)
 		case rw.statusCode >= 400:

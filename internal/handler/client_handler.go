@@ -108,19 +108,24 @@ func (h *ClientHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if team name already exists
-	_, err := h.store.GetTeamIDByName(r.Context(), req.TeamName)
-	if err == nil {
-		logging.Warn(r.Context(), "signup attempt with existing team name", "teamName", req.TeamName)
-		http.Error(w, "Team name already exists", http.StatusConflict)
-		return
-	}
-
 	teamID := "team-" + uuid.New().String()
 	hashedPassword, err := h.encryptionService.HashPassword(req.Password)
 	if err != nil {
 		logging.Error(r.Context(), "failed to hash password", "error", err)
 		http.Error(w, "Failed to hash password", http.StatusInternalServerError)
+		return
+	}
+
+	// Atomically register team name — prevents TOCTOU race on duplicate names
+	registered, err := h.store.RegisterTeamName(r.Context(), req.TeamName, teamID)
+	if err != nil {
+		logging.Error(r.Context(), "failed to register team name", "error", err)
+		http.Error(w, "Failed to register team", http.StatusInternalServerError)
+		return
+	}
+	if !registered {
+		logging.Warn(r.Context(), "signup attempt with existing team name", "teamName", req.TeamName)
+		http.Error(w, "Team name already exists", http.StatusConflict)
 		return
 	}
 
@@ -273,6 +278,7 @@ func (h *ClientHandler) GetTeamProgressHandler(w http.ResponseWriter, r *http.Re
 }
 
 // ResetTeamHandler resets the team's progress (solved characters and active session)
+// using targeted Redis operations that do not overwrite other team fields.
 func (h *ClientHandler) ResetTeamHandler(w http.ResponseWriter, r *http.Request) {
 	teamID, ok := r.Context().Value(middleware.TeamIDKey).(string)
 	if !ok {
@@ -281,18 +287,7 @@ func (h *ClientHandler) ResetTeamHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	team, err := h.store.ReadTeamData(r.Context(), teamID)
-	if err != nil {
-		logging.Warn(r.Context(), "team not found for reset", "teamId", teamID, "error", err)
-		http.Error(w, "Team not found", http.StatusNotFound)
-		return
-	}
-
-	// Reset progress
-	team.SolvedCharacters = []string{}
-	team.ActiveSessionID = ""
-
-	if err := h.store.WriteTeamData(r.Context(), teamID, team); err != nil {
+	if err := h.store.ResetTeamProgress(r.Context(), teamID); err != nil {
 		logging.Error(r.Context(), "failed to reset team progress", "teamId", teamID, "error", err)
 		http.Error(w, "Failed to reset team progress", http.StatusInternalServerError)
 		return

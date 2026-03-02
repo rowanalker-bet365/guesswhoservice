@@ -31,6 +31,9 @@ type ChaosService interface {
 
 	// GetWindowConfig returns the chaos window configuration.
 	GetWindowConfig() (windowSeconds, intervalSeconds int)
+
+	// SetWindowConfig updates the chaos window and interval durations.
+	SetWindowConfig(windowSeconds, intervalSeconds int)
 }
 
 type chaosService struct {
@@ -76,7 +79,20 @@ func (s *chaosService) IsEnabled() bool {
 }
 
 func (s *chaosService) GetWindowConfig() (windowSeconds, intervalSeconds int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.windowSeconds, s.intervalSeconds
+}
+
+func (s *chaosService) SetWindowConfig(windowSeconds, intervalSeconds int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if windowSeconds > 0 {
+		s.windowSeconds = windowSeconds
+	}
+	if intervalSeconds > 0 {
+		s.intervalSeconds = intervalSeconds
+	}
 }
 
 func (s *chaosService) ShouldFail(session *domain.Session) bool {
@@ -146,7 +162,13 @@ func (s *chaosService) IsInChaosWindow(session *domain.Session) bool {
 }
 
 func (s *chaosService) isInChaosWindow(session *domain.Session) bool {
-	if !s.IsEnabled() {
+	s.mu.RLock()
+	enabled := s.enabled
+	defaultInterval := s.intervalSeconds
+	defaultWindow := s.windowSeconds
+	s.mu.RUnlock()
+
+	if !enabled {
 		return false
 	}
 
@@ -159,10 +181,10 @@ func (s *chaosService) isInChaosWindow(session *domain.Session) bool {
 	windowSec := float64(session.ChaosProfile.WindowSeconds)
 
 	if intervalSec == 0 {
-		intervalSec = float64(s.intervalSeconds)
+		intervalSec = float64(defaultInterval)
 	}
 	if windowSec == 0 {
-		windowSec = float64(s.windowSeconds)
+		windowSec = float64(defaultWindow)
 	}
 
 	positionInInterval := float64(int(elapsed) % int(intervalSec))

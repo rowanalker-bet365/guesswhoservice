@@ -27,11 +27,10 @@ func NewSessionHandler(sessionService service.SessionService, traitCatalog servi
 
 // StartSessionResponse represents the response when starting a session
 type StartSessionResponse struct {
-	SessionID       string      `json:"sessionId"`
-	BoardSize       int         `json:"boardSize"`
-	TraitsAvailable int         `json:"traitsAvailable"`
-	GuessLimit      int         `json:"guessLimit"`
-	ChaosProfile    interface{} `json:"chaosProfile"`
+	SessionID       string `json:"sessionId"`
+	BoardSize       int    `json:"boardSize"`
+	TraitsAvailable int    `json:"traitsAvailable"`
+	GuessLimit      int    `json:"guessLimit"`
 }
 
 // StartSession handles POST /sessions/start
@@ -68,9 +67,6 @@ func (h *SessionHandler) StartSession(w http.ResponseWriter, r *http.Request) {
 		BoardSize:       session.BoardSize,
 		TraitsAvailable: session.TraitsAvailable,
 		GuessLimit:      session.GuessLimit,
-		ChaosProfile: map[string]interface{}{
-			"mode": session.ChaosProfile.Mode,
-		},
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -142,6 +138,11 @@ func (h *SessionHandler) GetBoard(w http.ResponseWriter, r *http.Request) {
 // AskQuestionRequest represents a request to ask a question
 type AskQuestionRequest struct {
 	QuestionID string `json:"questionId"`
+	// Value is the specific value being asked about for enum traits.
+	// For boolean traits this field is ignored.
+	// For enum traits it is required; the response will be true if the
+	// target's trait value matches this value (case-insensitive).
+	Value string `json:"value,omitempty"`
 }
 
 // AskQuestion handles POST /sessions/{sessionId}/ask
@@ -158,12 +159,13 @@ func (h *SessionHandler) AskQuestion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	answer, err := h.sessionService.AskQuestion(r.Context(), sessionID, req.QuestionID)
+	answer, err := h.sessionService.AskQuestion(r.Context(), sessionID, req.QuestionID, req.Value)
 	if err != nil {
 		// Check for chaos-injected error first
 		var chaosErr *service.ChaosError
 		if errors.As(err, &chaosErr) {
-			logging.Warn(r.Context(), "chaos: injected failure on ask", "questionId", req.QuestionID)
+			logging.Info(r.Context(), "chaos: injected failure on ask", "questionId", req.QuestionID)
+			logging.MarkChaosInjected(r)
 			writeErrorJSON(w, chaosErr.StatusCode, APIError{
 				Error:   chaosErr.ErrorCode,
 				Message: chaosErr.Message,
@@ -210,7 +212,8 @@ func (h *SessionHandler) SubmitGuess(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var chaosErr *service.ChaosError
 		if errors.As(err, &chaosErr) {
-			logging.Warn(r.Context(), "chaos: injected failure on guess", "candidateId", req.CandidateID)
+			logging.Info(r.Context(), "chaos: injected failure on guess", "candidateId", req.CandidateID)
+			logging.MarkChaosInjected(r)
 			writeErrorJSON(w, chaosErr.StatusCode, APIError{
 				Error:   chaosErr.ErrorCode,
 				Message: chaosErr.Message,
@@ -300,7 +303,8 @@ func (h *SessionHandler) Reveal(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var chaosErr *service.ChaosError
 		if errors.As(err, &chaosErr) {
-			logging.Warn(r.Context(), "chaos: injected failure on reveal")
+			logging.Info(r.Context(), "chaos: injected failure on reveal")
+			logging.MarkChaosInjected(r)
 			writeErrorJSON(w, chaosErr.StatusCode, APIError{
 				Error:   chaosErr.ErrorCode,
 				Message: chaosErr.Message,

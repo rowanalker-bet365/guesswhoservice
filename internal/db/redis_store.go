@@ -2,7 +2,10 @@ package db
 
 import (
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -52,6 +55,53 @@ if cur == false or cur == '' or tonumber(cur) == 0 or tonumber(ARGV[1]) < tonumb
     return 1
 end
 return 0
+`)
+
+// releaseSessionLockScript safely releases a session lock only if the caller still holds it.
+//
+// KEYS[1] = lock key
+// ARGV[1] = lock value (must match the value set during acquisition)
+var releaseSessionLockScript = redis.NewScript(`
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+else
+    return 0
+end
+`)
+
+// awardMilestoneScript atomically checks whether a milestone already exists for a team
+// and awards it (appending to the comma-separated milestones field, incrementing score,
+// and updating the leaderboard) only if the team does not already hold it.
+//
+// KEYS[1] = team hash key       (e.g. "team:<teamID>")
+// KEYS[2] = leaderboard sorted set key (e.g. "leaderboard")
+//
+// ARGV[1] = milestone string    (e.g. "M1")
+// ARGV[2] = score bonus         (integer)
+// ARGV[3] = team ID             (for leaderboard ZINCRBY member)
+//
+// Returns 1 if newly awarded, 0 if already present.
+var awardMilestoneScript = redis.NewScript(`
+local milestones = redis.call('HGET', KEYS[1], 'milestones')
+local milestone = ARGV[1]
+local bonus = tonumber(ARGV[2])
+local teamID = ARGV[3]
+
+if milestones and milestones ~= '' then
+    for m in string.gmatch(milestones, '[^,]+') do
+        if m == milestone then
+            return 0
+        end
+    end
+    milestones = milestones .. ',' .. milestone
+else
+    milestones = milestone
+end
+
+redis.call('HSET', KEYS[1], 'milestones', milestones)
+redis.call('HINCRBY', KEYS[1], 'score', bonus)
+redis.call('ZINCRBY', KEYS[2], bonus, teamID)
+return 1
 `)
 
 // TeamData represents the unified data model for a team.
@@ -483,4 +533,63 @@ func (s *Store) RemoveActiveSession(ctx context.Context, teamID, sessionID strin
 // Use this to wipe all data before a fresh hackathon run.
 func (s *Store) FlushAll(ctx context.Context) error {
 	return s.client.FlushDB(ctx).Err()
+}
+
+// AcquireSessionLock acquires a distributed lock for a session using SET NX EX.
+// Returns the lock value needed to release the lock, or an error if the lock
+// could not be acquired after retries.
+func (s *Store) AcquireSessionLock(ctx context.Context, sessionID string) (string, error) {
+	lockKey := "lock:session:" + sessionID
+	b := make([]byte, 16)
+	if _, err := cryptorand.Read(b); err != nil {
+		return "", fmt.Errorf("failed to generate lock value: %w", err)
+	}
+	lockValue := hex.EncodeToString(b)
+
+	for i := 0; i < 10; i++ {
+		ok, err := s.client.SetNX(ctx, lockKey, lockValue, 5*time.Second).Result()
+		if err != nil {
+			return "", fmt.Errorf("failed to acquire session lock: %w", err)
+		}
+		if ok {
+			return lockValue, nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return "", fmt.Errorf("could not acquire session lock: contention on %s", sessionID)
+}
+
+// ReleaseSessionLock releases a session lock only if the caller still holds it.
+func (s *Store) ReleaseSessionLock(ctx context.Context, sessionID string, lockValue string) {
+	lockKey := "lock:session:" + sessionID
+	releaseSessionLockScript.Run(ctx, s.client, []string{lockKey}, lockValue)
+}
+
+// AwardMilestoneAtomic atomically checks whether a team already holds a milestone
+// and awards it (appending, incrementing score, updating leaderboard) only if absent.
+// Returns true if newly awarded, false if already present.
+func (s *Store) AwardMilestoneAtomic(ctx context.Context, teamID string, milestone string, scoreBonus int) (bool, error) {
+	teamKey := "team:" + teamID
+	leaderboardKey := "leaderboard"
+	result, err := awardMilestoneScript.Run(ctx, s.client, []string{teamKey, leaderboardKey}, milestone, scoreBonus, teamID).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
+// ResetTeamProgress clears the active session and solved characters for a team
+// using targeted Redis operations that do not overwrite other team fields.
+func (s *Store) ResetTeamProgress(ctx context.Context, teamID string) error {
+	pipe := s.client.Pipeline()
+	pipe.HSet(ctx, "team:"+teamID, "active_session_id", "")
+	pipe.Del(ctx, "team:"+teamID+":solved_characters")
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// RegisterTeamName atomically registers a team name using HSETNX.
+// Returns true if the name was newly registered, false if it already exists.
+func (s *Store) RegisterTeamName(ctx context.Context, teamName, teamID string) (bool, error) {
+	return s.client.HSetNX(ctx, "team_names_to_ids", teamName, teamID).Result()
 }

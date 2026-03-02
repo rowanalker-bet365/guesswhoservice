@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 
-	"github.com/go-redis/redis/v8"
 	"github.com/guesswho/internal/db"
 	"github.com/guesswho/internal/domain"
 	"github.com/guesswho/internal/logging"
@@ -31,48 +30,20 @@ func NewMilestoneService(store *db.Store) MilestoneService {
 }
 
 func (m *milestoneService) AwardIfAbsent(ctx context.Context, teamID string, milestone domain.Milestone) bool {
-	// Look up the score bonus for this milestone.
 	scoreBonus, ok := domain.MilestoneScoreMap[milestone]
 	if !ok {
 		logging.Warn(ctx, "unknown milestone", "milestone", milestone)
 		return false
 	}
 
-	// Read current team data to inspect the existing milestones list.
-	teamData, err := m.store.ReadTeamData(ctx, teamID)
-	if err != nil && err != redis.Nil {
-		logging.Error(ctx, "failed to read team data for milestone check", "error", err)
-		return false
-	}
-	if teamData == nil {
-		logging.Warn(ctx, "no team data found for milestone", "milestone", milestone)
+	awarded, err := m.store.AwardMilestoneAtomic(ctx, teamID, string(milestone), scoreBonus)
+	if err != nil {
+		logging.Error(ctx, "failed to award milestone atomically", "milestone", milestone, "error", err)
 		return false
 	}
 
-	// Idempotency check: bail out if the milestone is already in the list.
-	milestoneStr := string(milestone)
-	for _, existing := range teamData.Milestones {
-		if existing == milestoneStr {
-			return false // already awarded, no-op
-		}
+	if awarded {
+		logging.Info(ctx, "milestone awarded", "milestone", milestone, "scoreBonus", scoreBonus)
 	}
-
-	// Append and persist the updated milestones list.
-	updatedMilestones := append(teamData.Milestones, milestoneStr)
-	if err := m.store.SetMilestones(ctx, teamID, updatedMilestones); err != nil {
-		logging.Error(ctx, "failed to persist milestone", "milestone", milestone, "error", err)
-		return false
-	}
-
-	// Award the score bonus using the existing IncrementTeamScore pipeline
-	// (HINCRBY on team hash + ZINCRBY on the leaderboard sorted set).
-	if err := m.store.IncrementTeamScore(ctx, teamID, scoreBonus); err != nil {
-		// The milestone record was already written above; log the score failure
-		// but return true so callers know the milestone was recorded.
-		logging.Error(ctx, "milestone recorded but score increment failed", "milestone", milestone, "error", err)
-		return true
-	}
-
-	logging.Info(ctx, "milestone awarded", "milestone", milestone, "scoreBonus", scoreBonus)
-	return true
+	return awarded
 }
