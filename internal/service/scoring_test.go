@@ -78,7 +78,7 @@ func TestScoringService_CalculateScore(t *testing.T) {
 		assert.Equal(t, 0, breakdown.TimeBonus)
 	})
 
-	t.Run("no question bonus for many questions", func(t *testing.T) {
+	t.Run("penalty for excessive questions", func(t *testing.T) {
 		questions := make([]string, 20)
 		for i := range questions {
 			questions[i] = "T01"
@@ -92,6 +92,23 @@ func TestScoringService_CalculateScore(t *testing.T) {
 
 		breakdown := service.CalculateScore(session)
 
-		assert.Equal(t, 0, breakdown.QuestionBonus)
+		assert.Equal(t, -25, breakdown.QuestionBonus)
+	})
+
+	t.Run("small penalty for slightly excessive questions", func(t *testing.T) {
+		questions := make([]string, 16)
+		for i := range questions {
+			questions[i] = "T01"
+		}
+
+		session := &domain.Session{
+			CreatedAt:      time.Now(),
+			QuestionsAsked: questions,
+			FailedRequests: 0,
+		}
+
+		breakdown := service.CalculateScore(session)
+
+		assert.Equal(t, -5, breakdown.QuestionBonus)
 	})
 }
