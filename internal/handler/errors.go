@@ -73,6 +73,36 @@ func classifyServiceError(err error, sessionID string, hints ...string) (int, AP
 			Message:   "An internal error occurred while processing your question. Please retry or contact the event organiser.",
 			SessionID: sessionID,
 		}
+	case strings.Contains(msg, "not_stage_2"):
+		return http.StatusBadRequest, APIError{
+			Error:     "not_stage_2",
+			Message:   "this endpoint requires a Stage 2 session",
+			SessionID: sessionID,
+		}
+	case strings.Contains(msg, "no_pending_decryption"):
+		return http.StatusConflict, APIError{
+			Error:     "no_pending_decryption",
+			Message:   "no encrypted guess response is pending for this session",
+			SessionID: sessionID,
+		}
+	case strings.Contains(msg, "wrong_decryption"):
+		return http.StatusUnprocessableEntity, APIError{
+			Error:     "wrong_decryption",
+			Message:   "decryption incorrect — check your cipher and key, then try again",
+			SessionID: sessionID,
+		}
+	case strings.Contains(msg, "session_locked"):
+		return http.StatusServiceUnavailable, APIError{
+			Error:     "session_locked",
+			Message:   "session is currently being modified, please retry shortly",
+			SessionID: sessionID,
+		}
+	case strings.Contains(msg, "pending_decryption"):
+		return http.StatusConflict, APIError{
+			Error:     "pending_decryption",
+			Message:   "a decryption challenge is pending — submit your answer to POST /sessions/{id}/decrypt first",
+			SessionID: sessionID,
+		}
 	default:
 		// Likely a redis.Nil / session-not-found error
 		return http.StatusNotFound, APIError{

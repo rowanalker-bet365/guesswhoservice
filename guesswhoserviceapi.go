@@ -163,6 +163,7 @@ func main() {
 	publicMux.HandleFunc("POST /sessions/{sessionId}/guess", sessionHandler.SubmitGuess)
 	publicMux.HandleFunc("POST /sessions/{sessionId}/reveal", sessionHandler.Reveal)
 	publicMux.HandleFunc("POST /sessions/{sessionId}/decode", traitHandler.Decode)
+	publicMux.HandleFunc("POST /sessions/{sessionId}/decrypt", sessionHandler.SubmitDecryption)
 
 	// Debug routes
 	mux.HandleFunc("GET /debug/team/{teamId}", debugHandler.GetTeamDebug)

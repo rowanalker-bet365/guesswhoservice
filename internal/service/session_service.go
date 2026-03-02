@@ -28,6 +28,7 @@ type SessionService interface {
 	AskQuestion(ctx context.Context, sessionID string, questionID string, value string) (*domain.TraitAnswer, error)
 	SubmitGuess(ctx context.Context, sessionID string, candidateID string) (*domain.GuessResult, error)
 	Reveal(ctx context.Context, sessionID string) (*domain.RevealResult, error)
+	SubmitDecryption(ctx context.Context, sessionID, teamID, submittedCandidateID string) (*domain.GuessResult, error)
 }
 
 type sessionService struct {
@@ -108,22 +109,28 @@ func (s *sessionService) StartSession(ctx context.Context, teamID string) (*doma
 		IntervalSeconds: s.chaosInterval,
 	}
 
-	session := domain.NewSession(sessionID, teamID, 3, perSessionSeed, chaosProfile)
-
-	// Generate board: load all characters from the catalog and shuffle them
-	// using the per-session seed so every session has a unique board order.
-	candidates, err := s.boardGenerator.GenerateBoard(perSessionSeed, s.characterCatalog)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate board: %w", err)
-	}
-
-	// Retrieve team data to filter solved characters
+	// Retrieve team data to determine stage and filter solved characters.
 	teamData, err := s.dbStore.ReadTeamData(ctx, teamID)
 	if err != nil && err != redis.Nil {
 		return nil, fmt.Errorf("failed to read team data: %w", err)
 	}
 	if err == redis.Nil {
 		teamData = &db.TeamData{}
+	}
+
+	// Determine stage: Stage 2 activates at 48+ total team solves
+	stage := 1
+	if teamData.Solves >= 48 {
+		stage = 2
+	}
+
+	session := domain.NewSession(sessionID, teamID, 3, perSessionSeed, chaosProfile, stage)
+
+	// Generate board: load all characters from the catalog and shuffle them
+	// using the per-session seed so every session has a unique board order.
+	candidates, err := s.boardGenerator.GenerateBoard(perSessionSeed, s.characterCatalog)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate board: %w", err)
 	}
 
 	// Filter out solved candidates
@@ -292,24 +299,27 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 		boolAnswer = strings.EqualFold(actualValue, value)
 	}
 
-	// Stage 1 — Step 1: Roll for block (25% chance).
-	// If blocked, do NOT record the question and do NOT count it.
-	// C2/W1: use unbiased threshold (64/256 = exactly 25%) and handle crand.Read error.
-	blockBytes := make([]byte, 1)
-	if _, err := crand.Read(blockBytes); err != nil {
-		// If crypto/rand is unavailable, log a warning and fall through (safe default: no block).
-		logging.Warn(ctx, "crypto/rand unavailable for block roll, skipping block", "error", err)
-	} else if int(blockBytes[0]) < 64 { // 64/256 = exactly 25%
-		logging.Debug(ctx, "trait blocked by Stage 1 filter", "questionId", questionID)
-		return &domain.TraitAnswer{
-			QuestionID: questionID,
-			TraitKey:   traitDef.TraitKey,
-			Blocked:    true,
-			Message:    "This trait is classified. You are not permitted to know this value.",
-		}, nil
+	// Stage 2: no blocking — skip block roll entirely
+	if session.Stage != 2 {
+		// Stage 1 — Step 1: Roll for block (25% chance).
+		// If blocked, do NOT record the question and do NOT count it.
+		// C2/W1: use unbiased threshold (64/256 = exactly 25%) and handle crand.Read error.
+		blockBytes := make([]byte, 1)
+		if _, err := crand.Read(blockBytes); err != nil {
+			// If crypto/rand is unavailable, log a warning and fall through (safe default: no block).
+			logging.Warn(ctx, "crypto/rand unavailable for block roll, skipping block", "error", err)
+		} else if int(blockBytes[0]) < 64 { // 64/256 = exactly 25%
+			logging.Debug(ctx, "trait blocked by Stage 1 filter", "questionId", questionID)
+			return &domain.TraitAnswer{
+				QuestionID: questionID,
+				TraitKey:   traitDef.TraitKey,
+				Blocked:    true,
+				Message:    "This trait is classified. You are not permitted to know this value.",
+			}, nil
+		}
 	}
 
-	// Stage 1 — Step 2: Determine encryption decision.
+	// Step 2: Determine encryption decision.
 	// The decision is stored per-questionID so repeated decode calls are consistent.
 	// L2: EncryptedQuestions is also used as the "already recorded" guard — if the
 	// questionID is already present the question was previously answered (non-blocked),
@@ -319,10 +329,6 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 		// Question was already asked and recorded — reuse the stored encryption decision.
 		shouldEncrypt = decided
 	} else {
-		// First time this question is answered (non-blocked): record it now.
-		session.RecordQuestion(questionID)
-		session.RevealTrait(traitDef.TraitKey)
-
 		// C2/W1: use unbiased threshold (102/256 ≈ 39.8%) and handle crand.Read error.
 		encRollBytes := make([]byte, 1)
 		if _, err := crand.Read(encRollBytes); err != nil {
@@ -334,7 +340,10 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 		if session.EncryptedQuestions == nil {
 			session.EncryptedQuestions = make(map[string]bool)
 		}
-		session.EncryptedQuestions[questionID] = shouldEncrypt
+		// First time this question is answered (non-blocked): record it now.
+		// RecordQuestion handles EncryptedQuestions, RevealTrait, and UnencryptedTraitAnswers.
+		answerStr := fmt.Sprintf("%v", boolAnswer)
+		session.RecordQuestion(questionID, traitDef.TraitKey, answerStr, shouldEncrypt)
 	}
 
 	// W4: Build the response (including the Encrypt call) BEFORE persisting the session
@@ -401,6 +410,11 @@ func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, cand
 		return nil, fmt.Errorf("session already completed")
 	}
 
+	// Block new guesses while a Stage 2 decryption is pending
+	if session.PendingDecryption {
+		return nil, fmt.Errorf("pending_decryption: a decryption challenge is pending — submit your answer to POST /sessions/{id}/decrypt first")
+	}
+
 	// Chaos injection — can fail any session API during chaos windows
 	if s.chaosService.ShouldFail(session) {
 		session.IncrementFailure("failed")
@@ -455,8 +469,41 @@ func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, cand
 		totalScore = -200
 	}
 
-	// Update session state
+	// Always record the guess attempt (tracks which candidates have been guessed)
 	session.RecordGuess(realCandidateID)
+
+	// Stage 2: 50% chance of returning an encrypted guess response
+	if session.Stage == 2 {
+		rollBuf := make([]byte, 1)
+		if _, randErr := crand.Read(rollBuf); randErr == nil && int(rollBuf[0]) < 128 {
+			witnessKey, wErr := s.encryptionService.DeriveWitnessKey(session.SessionID, session.UnencryptedTraitAnswers)
+			if wErr == nil {
+				// Encrypt the fake candidate ID that was submitted
+				encryptedID, eErr := s.encryptionService.Encrypt(candidateID, session.EncryptCipher, witnessKey)
+				if eErr == nil {
+					// Store pending state on the session
+					session.PendingDecryption = true
+					session.PendingGuessCorrect = correct
+					session.PendingDecryptionPlaintext = candidateID
+					session.PendingEncryptedResponse = encryptedID
+					if correct {
+						session.PendingScore = totalScore
+					}
+					// Persist session without marking complete
+					if saveErr := s.dbStore.WriteSession(ctx, session); saveErr != nil {
+						logging.Error(ctx, "failed to save pending session", "error", saveErr)
+					}
+					// Return a non-revealing result — handler will detect PendingDecryption
+					return &domain.GuessResult{Correct: false}, nil
+				}
+				logging.Error(ctx, "failed to encrypt guess response", "error", eErr)
+			} else {
+				logging.Error(ctx, "failed to derive witness key", "error", wErr)
+			}
+		}
+	}
+
+	// Update session state
 	if correct {
 		session.CorrectGuess = true
 		session.MarkComplete(true)
@@ -490,6 +537,14 @@ func (s *sessionService) SubmitGuess(ctx context.Context, sessionID string, cand
 	if correct {
 		// M4: First Correct Solve — awarded on the first correct guess.
 		s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneM4)
+
+		// M5: Cipher Breaker — awarded when a correct guess follows at least one encrypted question.
+		for _, wasEncrypted := range session.EncryptedQuestions {
+			if wasEncrypted {
+				s.milestoneService.AwardIfAbsent(ctx, session.TeamID, domain.MilestoneM5)
+				break
+			}
+		}
 
 		// S1: Efficiency — awarded when a character is solved with <= 10 questions.
 		if session.GetQuestionsAskedCount() <= 10 {
@@ -624,4 +679,115 @@ func (s *sessionService) updateTeamStats(ctx context.Context, session *domain.Se
 	if err := s.dbStore.RemoveActiveSession(ctx, session.TeamID, session.SessionID); err != nil {
 		logging.Error(ctx, "failed to remove session from active sessions set", "error", err)
 	}
+}
+
+func (s *sessionService) SubmitDecryption(ctx context.Context, sessionID, teamID, submittedCandidateID string) (*domain.GuessResult, error) {
+	// Acquire session lock
+	lockValue, err := s.dbStore.AcquireSessionLock(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("session_locked: session is currently being modified, please retry")
+	}
+	defer s.dbStore.ReleaseSessionLock(ctx, sessionID, lockValue)
+
+	// Load session
+	session, err := s.dbStore.ReadSession(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("session not found")
+	}
+
+	// Validate ownership
+	if session.TeamID != teamID {
+		return nil, fmt.Errorf("session not found")
+	}
+
+	// Must be Stage 2
+	if session.Stage != 2 {
+		return nil, fmt.Errorf("not_stage_2")
+	}
+
+	// Must have a pending decryption
+	if !session.PendingDecryption {
+		return nil, fmt.Errorf("no_pending_decryption")
+	}
+
+	// Validate the submitted decryption
+	if submittedCandidateID != session.PendingDecryptionPlaintext {
+		return nil, fmt.Errorf("wrong_decryption")
+	}
+
+	// Correct decryption — capture pending state then clear it
+	wasCorrect := session.PendingGuessCorrect
+	pendingScore := session.PendingScore
+	session.PendingDecryption = false
+	session.PendingGuessCorrect = false
+	session.PendingDecryptionPlaintext = ""
+	session.PendingEncryptedResponse = ""
+	session.PendingScore = 0
+
+	if wasCorrect {
+		// Apply +100 decryption bonus
+		finalScore := pendingScore + 100
+		if err := s.dbStore.IncrementTeamScore(ctx, teamID, finalScore); err != nil {
+			logging.Error(ctx, "failed to increment team score", "error", err)
+		}
+
+		// Award SP1 milestone
+		s.milestoneService.AwardIfAbsent(ctx, teamID, domain.MilestoneSP1)
+
+		// Award M5 if this session had at least one encrypted question
+		for _, wasEncrypted := range session.EncryptedQuestions {
+			if wasEncrypted {
+				s.milestoneService.AwardIfAbsent(ctx, teamID, domain.MilestoneM5)
+				break
+			}
+		}
+
+		// Mark session complete
+		session.MarkComplete(true)
+		if err := s.dbStore.WriteSession(ctx, session); err != nil {
+			logging.Error(ctx, "failed to save session", "error", err)
+		}
+
+		// Update team stats (clears active session, increments solves, etc.)
+		s.updateTeamStats(ctx, session, finalScore, true, session.TargetCandidate.CandidateID)
+
+		stats := domain.SessionStats{
+			TimeSeconds:    session.GetElapsedTime(),
+			QuestionsAsked: session.GetQuestionsAskedCount(),
+		}
+		return &domain.GuessResult{
+			Correct: true,
+			Score:   finalScore,
+			Stats:   stats,
+		}, nil
+	}
+
+	// Wrong guess — apply −200 penalty and decrement guess count
+	if err := s.dbStore.IncrementTeamScore(ctx, teamID, -200); err != nil {
+		logging.Error(ctx, "failed to apply decryption penalty", "error", err)
+	}
+	session.DecrementGuess()
+
+	// End the session if no guesses remain
+	if session.GuessesRemaining <= 0 {
+		session.MarkComplete(false)
+		if saveErr := s.dbStore.WriteSession(ctx, session); saveErr != nil {
+			logging.Error(ctx, "failed to save exhausted session", "error", saveErr)
+		}
+		s.updateTeamStats(ctx, session, 0, false, "")
+		stats := domain.SessionStats{
+			TimeSeconds:    session.GetElapsedTime(),
+			QuestionsAsked: session.GetQuestionsAskedCount(),
+		}
+		return &domain.GuessResult{
+			Correct: false,
+			Stats:   stats,
+		}, nil
+	}
+
+	if err := s.dbStore.WriteSession(ctx, session); err != nil {
+		logging.Error(ctx, "failed to save session", "error", err)
+	}
+
+	return &domain.GuessResult{Correct: false}, nil
 }
