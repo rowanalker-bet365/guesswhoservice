@@ -107,6 +107,15 @@ func (h *TraitHandler) Decode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// L4 (known gap): the encrypted field is validated for presence but its value is
+	// not verified against the stored ciphertext because the service does not persist
+	// per-question ciphertexts. A player could supply any non-empty string and still
+	// receive the session key. Fixing this fully would require storing the ciphertext
+	// at question-answer time — a larger structural change deferred to a future iteration.
+	// At minimum, log a warning so operators can observe suspicious decode calls.
+	logging.Warn(r.Context(), "decode: encrypted field value not verified against stored ciphertext (known gap L4)",
+		"sessionId", sessionID, "questionId", req.QuestionID)
+
 	session, err := h.sessionService.GetSession(r.Context(), sessionID)
 	if err != nil {
 		logging.Warn(r.Context(), "decode: session not found", "sessionId", sessionID, "error", err)

@@ -153,7 +153,8 @@ func (s *Session) GetQuestionsAskedCount() int {
 // candidate's initial subset or has been revealed session-wide via a question.
 func (s *Session) IsTraitVisibleForCandidate(candidateID, traitName string) bool {
 	// Legacy sessions (created before HP3) have no subset map — show all traits.
-	if s.CandidateTraitSubsets == nil {
+	// L6: use len() == 0 to cover both nil maps and partially-initialised empty maps.
+	if len(s.CandidateTraitSubsets) == 0 {
 		return true
 	}
 	for _, t := range s.CandidateTraitSubsets[candidateID] {
