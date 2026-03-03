@@ -35,7 +35,7 @@ func newMockCatalog(n int) CharacterCatalogService {
 		chars[i] = domain.Candidate{
 			CandidateID: fmt.Sprintf("C%02d", i+1),
 			DisplayName: "",
-			ImagePath:   fmt.Sprintf("/public/images/C%02d.png", i+1),
+			ImagePath:   fmt.Sprintf("/images/C%02d.png", i+1),
 			Traits:      map[string]interface{}{"T01": true},
 		}
 	}

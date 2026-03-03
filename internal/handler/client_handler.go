@@ -376,7 +376,7 @@ func (h *ClientHandler) GetMasterBoardHandler(w http.ResponseWriter, r *http.Req
 
 		// Look up the canonical image path from the character catalog.
 		// Fall back to a predictable default if the character is not found.
-		imagePath := fmt.Sprintf("/public/images/%s.png", charID)
+		imagePath := fmt.Sprintf("/images/%s.png", charID)
 		if char, ok := h.characterCatalog.GetCharacterByID(charID); ok {
 			imagePath = char.ImagePath
 		}
