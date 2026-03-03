@@ -54,6 +54,14 @@ func (h *SessionHandler) StartSession(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(`{"error":"too many active sessions, please wait for your current session to expire"}`))
 			return
 		}
+		if errors.Is(err, service.ErrTeamNotFound) {
+			writeErrorJSON(w, http.StatusForbidden, APIError{
+				Error:   "team_not_found",
+				Message: "The team ID provided does not correspond to a registered team.",
+				Field:   "X-Team-Id",
+			})
+			return
+		}
 		logging.Error(r.Context(), "failed to start session", "error", err)
 		writeErrorJSON(w, http.StatusInternalServerError, APIError{
 			Error:   "session_creation_failed",

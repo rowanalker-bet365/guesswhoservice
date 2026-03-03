@@ -47,6 +47,7 @@ type Session struct {
 	EncryptKey                string              `json:"encryptKey"`
 	EncryptCipher             string              `json:"encryptCipher"`
 	EncryptedQuestions        map[string]bool     `json:"encryptedQuestions"`
+	BlockedQuestions          map[string]bool     `json:"blockedQuestions"`
 	CandidateTraitSubsets     map[string][]string `json:"candidateTraitSubsets"` // per-candidate initial visible trait keys
 	RevealedTraits            []string            `json:"revealedTraits"`        // trait names unlocked via questions (session-wide)
 	Stage                     int                 `json:"stage"`
@@ -93,6 +94,7 @@ func NewSession(sessionID, teamID string, guessLimit int, seed int64, chaos Chao
 		EncryptKey:              encryptKey,
 		EncryptCipher:           encryptCipher,
 		EncryptedQuestions:      make(map[string]bool),
+		BlockedQuestions:        make(map[string]bool),
 		CandidateTraitSubsets:   make(map[string][]string),
 		RevealedTraits:          make([]string, 0),
 		Stage:                   stage,

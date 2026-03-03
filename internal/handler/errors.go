@@ -103,6 +103,11 @@ func classifyServiceError(err error, sessionID string, hints ...string) (int, AP
 			Message:   "a decryption challenge is pending — submit your answer to POST /sessions/{id}/decrypt first",
 			SessionID: sessionID,
 		}
+	case strings.Contains(msg, "team not found"):
+		return http.StatusForbidden, APIError{
+			Error:   "team_not_found",
+			Message: "The team ID does not correspond to a registered team.",
+		}
 	default:
 		// Likely a redis.Nil / session-not-found error
 		return http.StatusNotFound, APIError{

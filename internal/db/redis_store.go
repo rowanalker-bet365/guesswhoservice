@@ -593,3 +593,13 @@ func (s *Store) ResetTeamProgress(ctx context.Context, teamID string) error {
 func (s *Store) RegisterTeamName(ctx context.Context, teamName, teamID string) (bool, error) {
 	return s.client.HSetNX(ctx, "team_names_to_ids", teamName, teamID).Result()
 }
+
+// TeamExists checks whether a team hash exists in Redis.
+// Returns true if the key "team:<teamID>" is present, false otherwise.
+func (s *Store) TeamExists(ctx context.Context, teamID string) (bool, error) {
+	n, err := s.client.Exists(ctx, "team:"+teamID).Result()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}

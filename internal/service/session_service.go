@@ -21,6 +21,10 @@ import (
 // maximum number of concurrent active sessions (2).
 var ErrTooManySessions = errors.New("too many active sessions for this team")
 
+// ErrTeamNotFound is returned by StartSession when the provided team ID does
+// not correspond to a registered team in the data store.
+var ErrTeamNotFound = errors.New("team not found")
+
 // SessionService manages game sessions
 type SessionService interface {
 	StartSession(ctx context.Context, teamID string) (*domain.Session, error)
@@ -95,6 +99,14 @@ func (s *sessionService) StartSession(ctx context.Context, teamID string) (*doma
 	}
 	if count >= 2 {
 		return nil, ErrTooManySessions
+	}
+
+	exists, err := s.dbStore.TeamExists(ctx, teamID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to verify team existence: %w", err)
+	}
+	if !exists {
+		return nil, ErrTeamNotFound
 	}
 
 	sessionID := fmt.Sprintf("s_%s", uuid.New().String()[:8])
@@ -299,16 +311,25 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 		boolAnswer = strings.EqualFold(actualValue, value)
 	}
 
-	// Stage 2: no blocking — skip block roll entirely
 	if session.Stage != 2 {
-		// Stage 1 — Step 1: Roll for block (25% chance).
-		// If blocked, do NOT record the question and do NOT count it.
-		// C2/W1: use unbiased threshold (64/256 = exactly 25%) and handle crand.Read error.
-		blockBytes := make([]byte, 1)
-		if _, err := crand.Read(blockBytes); err != nil {
-			// If crypto/rand is unavailable, log a warning and fall through (safe default: no block).
-			logging.Warn(ctx, "crypto/rand unavailable for block roll, skipping block", "error", err)
-		} else if int(blockBytes[0]) < 64 { // 64/256 = exactly 25%
+		if session.BlockedQuestions == nil {
+			session.BlockedQuestions = make(map[string]bool)
+		}
+		blocked, alreadyDecided := session.BlockedQuestions[questionID]
+		if !alreadyDecided {
+			blockBytes := make([]byte, 1)
+			if _, err := crand.Read(blockBytes); err != nil {
+				logging.Warn(ctx, "crypto/rand unavailable for block roll, skipping block", "error", err)
+				blocked = false
+			} else {
+				blocked = int(blockBytes[0]) < 64
+			}
+			session.BlockedQuestions[questionID] = blocked
+		}
+		if blocked {
+			if err := s.dbStore.WriteSession(ctx, session); err != nil {
+				logging.Error(ctx, "failed to persist block decision", "error", err)
+			}
 			logging.Debug(ctx, "trait blocked by Stage 1 filter", "questionId", questionID)
 			return &domain.TraitAnswer{
 				QuestionID: questionID,
