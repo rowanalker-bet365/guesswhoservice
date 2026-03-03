@@ -188,7 +188,7 @@ func (h *DebugHandler) DecryptHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListTeamsDebug handles GET /debug/teams.
-// Returns debug data for every registered team, including active session info.
+// Returns debug data for every registered team, keyed by team name for readability.
 func (h *DebugHandler) ListTeamsDebug(w http.ResponseWriter, r *http.Request) {
 	if !h.authorize(w, r) {
 		return
@@ -202,16 +202,14 @@ func (h *DebugHandler) ListTeamsDebug(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results := make([]map[string]interface{}, 0, len(teamIDs))
+	teams := make(map[string]map[string]interface{}, len(teamIDs))
 	for _, teamID := range teamIDs {
 		team, err := h.store.ReadTeamData(ctx, teamID)
 		if err != nil {
 			continue
 		}
 
-		entry := map[string]interface{}{
-			"teamId":           teamID,
-			"name":             team.Name,
+		data := map[string]interface{}{
 			"color":            team.Color,
 			"registeredAt":     team.RegisteredAt,
 			"score":            team.Score,
@@ -227,31 +225,36 @@ func (h *DebugHandler) ListTeamsDebug(w http.ResponseWriter, r *http.Request) {
 				if session.TargetCandidate != nil && session.CandidateIDMapRev != nil {
 					targetFakeID = session.CandidateIDMapRev[session.TargetCandidate.CandidateID]
 				}
-				entry["targetCandidate"] = targetFakeID
-				entry["questionsAsked"] = session.QuestionsAsked
-				entry["failedRequests"] = session.FailedRequests
-				entry["timeouts"] = session.Timeouts
-				entry["unhandled5xx"] = session.Unhandled5xx
-				entry["guessesRemaining"] = session.GuessesRemaining
-				entry["completed"] = session.Completed
-				entry["correctGuess"] = session.CorrectGuess
-				entry["guessedCandidates"] = session.GuessedCandidates
-				entry["encryptKey"] = session.EncryptKey
-				entry["encryptCipher"] = session.EncryptCipher
-				entry["encryptedQuestions"] = session.EncryptedQuestions
-				entry["blockedQuestions"] = session.BlockedQuestions
+				data["activeSession"] = map[string]interface{}{
+					"targetCandidate":    targetFakeID,
+					"questionsAsked":     session.QuestionsAsked,
+					"failedRequests":     session.FailedRequests,
+					"timeouts":           session.Timeouts,
+					"unhandled5xx":       session.Unhandled5xx,
+					"guessesRemaining":   session.GuessesRemaining,
+					"completed":          session.Completed,
+					"correctGuess":       session.CorrectGuess,
+					"guessedCandidates":  session.GuessedCandidates,
+					"encryptKey":         session.EncryptKey,
+					"encryptCipher":      session.EncryptCipher,
+					"encryptedQuestions": session.EncryptedQuestions,
+					"blockedQuestions":   session.BlockedQuestions,
+				}
 			}
 		}
 
-		results = append(results, entry)
+		teams[team.Name] = map[string]interface{}{
+			"teamId": teamID,
+			"data":   data,
+		}
 	}
 
-	logging.Info(ctx, "debug teams listed", "count", len(results))
+	logging.Info(ctx, "debug teams listed", "count", len(teams))
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"count": len(results),
-		"teams": results,
+		"count": len(teams),
+		"teams": teams,
 	})
 }
 
