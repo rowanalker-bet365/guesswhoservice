@@ -166,7 +166,9 @@ func main() {
 	publicMux.HandleFunc("POST /sessions/{sessionId}/decrypt", sessionHandler.SubmitDecryption)
 
 	// Debug routes
+	mux.HandleFunc("GET /debug/teams", debugHandler.ListTeamsDebug)
 	mux.HandleFunc("GET /debug/team/{teamId}", debugHandler.GetTeamDebug)
+	mux.HandleFunc("DELETE /debug/team/{teamId}", debugHandler.DeleteTeamDebug)
 	mux.HandleFunc("POST /debug/flush", debugHandler.FlushAll)
 	mux.HandleFunc("POST /debug/decrypt", debugHandler.DecryptHandler)
 
