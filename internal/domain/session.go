@@ -3,6 +3,7 @@ package domain
 import (
 	cryptorand "crypto/rand"
 	"encoding/hex"
+	"math/rand"
 	"time"
 )
 
@@ -43,54 +44,76 @@ type Session struct {
 	GuessedCandidates     map[string]bool     `json:"guessedCandidates"`
 	CandidateIDMap        map[string]string   `json:"candidateIdMap"`    // fakeID -> realID
 	CandidateIDMapRev     map[string]string   `json:"candidateIdMapRev"` // realID -> fakeID
-	EncryptKey            string              `json:"encryptKey"`
-	EncryptCipher         string              `json:"encryptCipher"`
-	EncryptedQuestions    map[string]bool     `json:"encryptedQuestions"`
-	CandidateTraitSubsets map[string][]string `json:"candidateTraitSubsets"` // per-candidate initial visible trait keys
-	RevealedTraits        []string            `json:"revealedTraits"`        // trait names unlocked via questions (session-wide)
+	EncryptKey                string              `json:"encryptKey"`
+	EncryptCipher             string              `json:"encryptCipher"`
+	EncryptedQuestions        map[string]bool     `json:"encryptedQuestions"`
+	BlockedQuestions          map[string]bool     `json:"blockedQuestions"`
+	CandidateTraitSubsets     map[string][]string `json:"candidateTraitSubsets"` // per-candidate initial visible trait keys
+	RevealedTraits            []string            `json:"revealedTraits"`        // trait names unlocked via questions (session-wide)
+	Stage                     int                 `json:"stage"`
+	PendingDecryption         bool                `json:"pendingDecryption"`
+	PendingGuessCorrect       bool                `json:"pendingGuessCorrect"`
+	PendingDecryptionPlaintext string             `json:"pendingDecryptionPlaintext"`
+	PendingScore              int                 `json:"pendingScore"`
+	PendingEncryptedResponse  string              `json:"pendingEncryptedResponse"`
+	UnencryptedTraitAnswers map[string]string   `json:"unencryptedTraitAnswers"`
+	TeamSolvesAtStart       int                 `json:"teamSolvesAtStart"`
 }
 
 // NewSession creates a new game session
-func NewSession(sessionID, teamID string, guessLimit int, seed int64, chaos ChaosProfile) *Session {
-	// Generate a random 8-byte key for this session (used by caesar and xor ciphers)
-	keyBytes := make([]byte, 8)
+func NewSession(sessionID, teamID string, guessLimit int, seed int64, chaos ChaosProfile, stage int) *Session {
+	// Generate a random 32-byte key for this session
+	keyBytes := make([]byte, 32)
 	if _, err := cryptorand.Read(keyBytes); err != nil {
-		// Fallback: use a deterministic key from the session ID
-		keyBytes = []byte(sessionID + "0000000000000000")[:8]
+		panic("failed to generate encryption key: " + err.Error())
 	}
-	encryptKey := hex.EncodeToString(keyBytes)
+	encryptKey := hex.EncodeToString(keyBytes) // 64-char hex string
 
-	// Randomly select a cipher for this session using crypto/rand
-	ciphers := []string{"base64", "hex", "reverse", "caesar", "xor", "vigenere", "xor-base64"}
-	idxBytes := make([]byte, 1)
-	cryptorand.Read(idxBytes)
-	encryptCipher := ciphers[int(idxBytes[0])%len(ciphers)]
+	var cipherPool []string
+	if stage == 2 {
+		cipherPool = []string{"xor", "aes-128-gcm", "aes-256-cbc"}
+	} else {
+		cipherPool = []string{"caesar", "vigenere", "xor", "aes-128-gcm", "aes-256-cbc"}
+	}
+	r := rand.New(rand.NewSource(seed))
+	encryptCipher := cipherPool[r.Intn(len(cipherPool))]
 
 	return &Session{
-		SessionID:             sessionID,
-		TeamID:                teamID,
-		BoardSize:             64,
-		TraitsAvailable:       64,
-		GuessLimit:            guessLimit,
-		ChaosProfile:          chaos,
-		Seed:                  seed,
-		CreatedAt:             time.Now(),
-		QuestionsAsked:        make([]string, 0),
-		GuessesRemaining:      guessLimit,
-		Completed:             false,
-		CorrectGuess:          false,
-		GuessedCandidates:     make(map[string]bool),
-		EncryptKey:            encryptKey,
-		EncryptCipher:         encryptCipher,
-		EncryptedQuestions:    make(map[string]bool),
-		CandidateTraitSubsets: make(map[string][]string),
-		RevealedTraits:        make([]string, 0),
+		SessionID:               sessionID,
+		TeamID:                  teamID,
+		BoardSize:               64,
+		TraitsAvailable:         64,
+		GuessLimit:              guessLimit,
+		ChaosProfile:            chaos,
+		Seed:                    seed,
+		CreatedAt:               time.Now(),
+		QuestionsAsked:          make([]string, 0),
+		GuessesRemaining:        guessLimit,
+		Completed:               false,
+		CorrectGuess:            false,
+		GuessedCandidates:       make(map[string]bool),
+		EncryptKey:              encryptKey,
+		EncryptCipher:           encryptCipher,
+		EncryptedQuestions:      make(map[string]bool),
+		BlockedQuestions:        make(map[string]bool),
+		CandidateTraitSubsets:   make(map[string][]string),
+		RevealedTraits:          make([]string, 0),
+		Stage:                   stage,
+		UnencryptedTraitAnswers: make(map[string]string),
 	}
 }
 
 // RecordQuestion records that a question was asked
-func (s *Session) RecordQuestion(questionID string) {
+func (s *Session) RecordQuestion(questionID, traitKey, answer string, encrypted bool) {
 	s.QuestionsAsked = append(s.QuestionsAsked, questionID)
+	s.EncryptedQuestions[questionID] = encrypted
+	s.RevealTrait(traitKey)
+	if !encrypted {
+		if s.UnencryptedTraitAnswers == nil {
+			s.UnencryptedTraitAnswers = make(map[string]string)
+		}
+		s.UnencryptedTraitAnswers[traitKey] = answer
+	}
 }
 
 // IncrementFailure increments the failure counters

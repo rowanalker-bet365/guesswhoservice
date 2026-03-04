@@ -5,6 +5,7 @@ import (
 	cryptorand "crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -13,6 +14,9 @@ import (
 	"github.com/go-redis/redis/v8"
 	"github.com/guesswho/internal/domain"
 )
+
+// ErrTeamNotFound is returned when a team does not exist in Redis.
+var ErrTeamNotFound = errors.New("team not found")
 
 // LeaderboardEntry represents a single ranked entry in the leaderboard.
 // Fields match the UI's ApiLeaderboardEntry contract after transformation in the Next.js route.
@@ -592,4 +596,56 @@ func (s *Store) ResetTeamProgress(ctx context.Context, teamID string) error {
 // Returns true if the name was newly registered, false if it already exists.
 func (s *Store) RegisterTeamName(ctx context.Context, teamName, teamID string) (bool, error) {
 	return s.client.HSetNX(ctx, "team_names_to_ids", teamName, teamID).Result()
+}
+
+// TeamExists checks whether a team hash exists in Redis.
+// Returns true if the key "team:<teamID>" is present, false otherwise.
+func (s *Store) TeamExists(ctx context.Context, teamID string) (bool, error) {
+	n, err := s.client.Exists(ctx, "team:"+teamID).Result()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// DeleteTeam removes a team and all its associated data from Redis.
+// Returns ErrTeamNotFound if the team does not exist.
+func (s *Store) DeleteTeam(ctx context.Context, teamID string) error {
+	// Phase 1: Discovery — fetch team name (for name-to-ID cleanup) and active sessions.
+	pipe := s.client.Pipeline()
+	nameCmd := pipe.HGet(ctx, "team:"+teamID, "name")
+	sessionsCmd := pipe.SMembers(ctx, "active_sessions:team:"+teamID)
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		return err
+	}
+
+	teamName, err := nameCmd.Result()
+	if err == redis.Nil {
+		return fmt.Errorf("%w: %s", ErrTeamNotFound, teamID)
+	}
+	if err != nil {
+		return err
+	}
+
+	sessionIDs, _ := sessionsCmd.Result()
+
+	// Phase 2: Deletion — single pipeline for all cleanup commands.
+	pipe = s.client.Pipeline()
+	pipe.Del(ctx, "team:"+teamID)
+	pipe.HDel(ctx, "team_names_to_ids", teamName)
+	pipe.SRem(ctx, "all_team_ids", teamID)
+	pipe.Del(ctx, "team:"+teamID+":solved_characters")
+	pipe.Del(ctx, "active_sessions:team:"+teamID)
+	pipe.ZRem(ctx, "leaderboard", teamID)
+
+	for _, charID := range s.characterIDs {
+		pipe.SRem(ctx, "masterboard:"+charID, teamID)
+	}
+	for _, sessionID := range sessionIDs {
+		pipe.Del(ctx, "session:"+sessionID)
+		pipe.Del(ctx, "lock:session:"+sessionID)
+	}
+
+	_, err = pipe.Exec(ctx)
+	return err
 }

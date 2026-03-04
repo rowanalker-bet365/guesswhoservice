@@ -163,9 +163,12 @@ func main() {
 	publicMux.HandleFunc("POST /sessions/{sessionId}/guess", sessionHandler.SubmitGuess)
 	publicMux.HandleFunc("POST /sessions/{sessionId}/reveal", sessionHandler.Reveal)
 	publicMux.HandleFunc("POST /sessions/{sessionId}/decode", traitHandler.Decode)
+	publicMux.HandleFunc("POST /sessions/{sessionId}/decrypt", sessionHandler.SubmitDecryption)
 
 	// Debug routes
+	mux.HandleFunc("GET /debug/teams", debugHandler.ListTeamsDebug)
 	mux.HandleFunc("GET /debug/team/{teamId}", debugHandler.GetTeamDebug)
+	mux.HandleFunc("DELETE /debug/team/{teamId}", debugHandler.DeleteTeamDebug)
 	mux.HandleFunc("POST /debug/flush", debugHandler.FlushAll)
 	mux.HandleFunc("POST /debug/decrypt", debugHandler.DecryptHandler)
 
@@ -188,6 +191,7 @@ func main() {
 			"service": "Guess Who API",
 			"version": "1.0.0",
 			"endpoints": {
+				"health": "GET /health",
 				"start_session": "POST /sessions/start",
 				"get_board": "GET /sessions/{sessionId}/board",
 				"get_questions": "GET /sessions/{sessionId}/questions",
@@ -195,8 +199,8 @@ func main() {
 				"ask_question": "POST /sessions/{sessionId}/ask",
 				"submit_guess": "POST /sessions/{sessionId}/guess",
 				"reveal": "POST /sessions/{sessionId}/reveal",
-				"leaderboard": "GET /leaderboard",
-				"health": "GET /health"
+				"decode": "POST /sessions/{sessionId}/decode",
+				"decrypt": "POST /sessions/{sessionId}/decrypt"
 			}
 		}`))
 	})

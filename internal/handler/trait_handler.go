@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/guesswho/internal/domain"
 	"github.com/guesswho/internal/logging"
 	"github.com/guesswho/internal/service"
 )
@@ -136,10 +135,15 @@ func (h *TraitHandler) Decode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hint := h.encryptionService.GetCipherInfo(session.EncryptCipher, session.EncryptKey)
-
-	// M5: Encrypted Answer Handled — awarded once when a team successfully calls decode.
-	h.milestoneService.AwardIfAbsent(r.Context(), session.TeamID, domain.MilestoneM5)
+	hint, err := h.encryptionService.GetCipherInfo(session.EncryptCipher, session.EncryptKey)
+	if err != nil {
+		logging.Warn(r.Context(), "decode: failed to get cipher info", "sessionId", sessionID, "cipher", session.EncryptCipher, "error", err)
+		writeErrorJSON(w, http.StatusInternalServerError, APIError{
+			Error:   "cipher_info_error",
+			Message: "Failed to retrieve cipher information for this session.",
+		})
+		return
+	}
 
 	logging.Debug(r.Context(), "decode info returned", "sessionId", sessionID, "questionId", req.QuestionID, "cipher", session.EncryptCipher)
 

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"encoding/json"
 	"net"
 	"net/http"
 	"sync"
@@ -59,7 +60,12 @@ func (rl *RateLimiter) Limit(capacity, refillRate int) func(http.Handler) http.H
 
 			if !rl.allow(key, capacity, refillRate) {
 				logging.Warn(r.Context(), "rate limit exceeded", "teamId", teamID, "path", r.URL.Path)
-				http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusTooManyRequests)
+				json.NewEncoder(w).Encode(map[string]string{
+					"error":   "rate_limit_exceeded",
+					"message": "Too many requests. Please slow down and retry.",
+				})
 				return
 			}
 

@@ -2,7 +2,7 @@
   {
     "id": "C01",
     "name": "",
-    "image": "/public/images/C01.png",
+    "image": "/images/C01.png",
     "traits": {
       "hair_color": "black",
       "hair_length": "short",
@@ -73,7 +73,7 @@
   {
     "id": "C02",
     "name": "",
-    "image": "/public/images/C02.png",
+    "image": "/images/C02.png",
     "traits": {
       "hair_color": "brown",
       "hair_length": "medium",
@@ -144,7 +144,7 @@
   {
     "id": "C03",
     "name": "",
-    "image": "/public/images/C03.png",
+    "image": "/images/C03.png",
     "traits": {
       "hair_color": "blonde",
       "hair_length": "long",
@@ -215,7 +215,7 @@
   {
     "id": "C04",
     "name": "",
-    "image": "/public/images/C04.png",
+    "image": "/images/C04.png",
     "traits": {
       "hair_color": "red",
       "hair_length": "short",
@@ -286,7 +286,7 @@
   {
     "id": "C05",
     "name": "",
-    "image": "/public/images/C05.png",
+    "image": "/images/C05.png",
     "traits": {
       "hair_color": "black",
       "hair_length": "medium",
@@ -357,7 +357,7 @@
   {
     "id": "C06",
     "name": "",
-    "image": "/public/images/C06.png",
+    "image": "/images/C06.png",
     "traits": {
       "hair_color": "brown",
       "hair_length": "long",
@@ -428,7 +428,7 @@
   {
     "id": "C07",
     "name": "",
-    "image": "/public/images/C07.png",
+    "image": "/images/C07.png",
     "traits": {
       "hair_color": "blonde",
       "hair_length": "short",
@@ -499,7 +499,7 @@
   {
     "id": "C08",
     "name": "",
-    "image": "/public/images/C08.png",
+    "image": "/images/C08.png",
     "traits": {
       "hair_color": "red",
       "hair_length": "medium",
@@ -570,7 +570,7 @@
   {
     "id": "C09",
     "name": "",
-    "image": "/public/images/C09.png",
+    "image": "/images/C09.png",
     "traits": {
       "hair_color": "black",
       "hair_length": "long",
@@ -641,7 +641,7 @@
   {
     "id": "C10",
     "name": "",
-    "image": "/public/images/C10.png",
+    "image": "/images/C10.png",
     "traits": {
       "hair_color": "brown",
       "hair_length": "short",
@@ -712,7 +712,7 @@
   {
     "id": "C11",
     "name": "",
-    "image": "/public/images/C11.png",
+    "image": "/images/C11.png",
     "traits": {
       "hair_color": "blonde",
       "hair_length": "medium",
@@ -783,7 +783,7 @@
   {
     "id": "C12",
     "name": "",
-    "image": "/public/images/C12.png",
+    "image": "/images/C12.png",
     "traits": {
       "hair_color": "red",
       "hair_length": "long",
@@ -854,7 +854,7 @@
   {
     "id": "C13",
     "name": "",
-    "image": "/public/images/C13.png",
+    "image": "/images/C13.png",
     "traits": {
       "hair_color": "black",
       "hair_length": "short",
@@ -925,7 +925,7 @@
   {
     "id": "C14",
     "name": "",
-    "image": "/public/images/C14.png",
+    "image": "/images/C14.png",
     "traits": {
       "hair_color": "brown",
       "hair_length": "medium",
@@ -996,7 +996,7 @@
   {
     "id": "C15",
     "name": "",
-    "image": "/public/images/C15.png",
+    "image": "/images/C15.png",
     "traits": {
       "hair_color": "blonde",
       "hair_length": "long",
@@ -1067,7 +1067,7 @@
   {
     "id": "C16",
     "name": "",
-    "image": "/public/images/C16.png",
+    "image": "/images/C16.png",
     "traits": {
       "hair_color": "red",
       "hair_length": "short",
@@ -1138,7 +1138,7 @@
   {
     "id": "C17",
     "name": "",
-    "image": "/public/images/C17.png",
+    "image": "/images/C17.png",
     "traits": {
       "hair_color": "black",
       "hair_length": "medium",
@@ -1209,7 +1209,7 @@
   {
     "id": "C18",
     "name": "",
-    "image": "/public/images/C18.png",
+    "image": "/images/C18.png",
     "traits": {
       "hair_color": "brown",
       "hair_length": "long",
@@ -1280,7 +1280,7 @@
   {
     "id": "C19",
     "name": "",
-    "image": "/public/images/C19.png",
+    "image": "/images/C19.png",
     "traits": {
       "hair_color": "blonde",
       "hair_length": "short",
@@ -1351,7 +1351,7 @@
   {
     "id": "C20",
     "name": "",
-    "image": "/public/images/C20.png",
+    "image": "/images/C20.png",
     "traits": {
       "hair_color": "red",
       "hair_length": "medium",
@@ -1422,7 +1422,7 @@
   {
     "id": "C21",
     "name": "",
-    "image": "/public/images/C21.png",
+    "image": "/images/C21.png",
     "traits": {
       "hair_color": "black",
       "hair_length": "long",
@@ -1493,7 +1493,7 @@
   {
     "id": "C22",
     "name": "",
-    "image": "/public/images/C22.png",
+    "image": "/images/C22.png",
     "traits": {
       "hair_color": "brown",
       "hair_length": "short",
@@ -1564,7 +1564,7 @@
   {
     "id": "C23",
     "name": "",
-    "image": "/public/images/C23.png",
+    "image": "/images/C23.png",
     "traits": {
       "hair_color": "blonde",
       "hair_length": "medium",
@@ -1635,7 +1635,7 @@
   {
     "id": "C24",
     "name": "",
-    "image": "/public/images/C24.png",
+    "image": "/images/C24.png",
     "traits": {
       "hair_color": "red",
       "hair_length": "long",
@@ -1706,7 +1706,7 @@
   {
     "id": "C25",
     "name": "",
-    "image": "/public/images/C25.png",
+    "image": "/images/C25.png",
     "traits": {
       "hair_color": "black",
       "hair_length": "short",
@@ -1777,7 +1777,7 @@
   {
     "id": "C26",
     "name": "",
-    "image": "/public/images/C26.png",
+    "image": "/images/C26.png",
     "traits": {
       "hair_color": "brown",
       "hair_length": "medium",
@@ -1848,7 +1848,7 @@
   {
     "id": "C27",
     "name": "",
-    "image": "/public/images/C27.png",
+    "image": "/images/C27.png",
     "traits": {
       "hair_color": "blonde",
       "hair_length": "long",
@@ -1919,7 +1919,7 @@
   {
     "id": "C28",
     "name": "",
-    "image": "/public/images/C28.png",
+    "image": "/images/C28.png",
     "traits": {
       "hair_color": "red",
       "hair_length": "short",
@@ -1990,7 +1990,7 @@
   {
     "id": "C29",
     "name": "",
-    "image": "/public/images/C29.png",
+    "image": "/images/C29.png",
     "traits": {
       "hair_color": "black",
       "hair_length": "medium",
@@ -2061,7 +2061,7 @@
   {
     "id": "C30",
     "name": "",
-    "image": "/public/images/C30.png",
+    "image": "/images/C30.png",
     "traits": {
       "hair_color": "brown",
       "hair_length": "long",
@@ -2132,7 +2132,7 @@
   {
     "id": "C31",
     "name": "",
-    "image": "/public/images/C31.png",
+    "image": "/images/C31.png",
     "traits": {
       "hair_color": "blonde",
       "hair_length": "short",
@@ -2203,7 +2203,7 @@
   {
     "id": "C32",
     "name": "",
-    "image": "/public/images/C32.png",
+    "image": "/images/C32.png",
     "traits": {
       "hair_color": "red",
       "hair_length": "medium",
@@ -2274,7 +2274,7 @@
   {
     "id": "C33",
     "name": "",
-    "image": "/public/images/C33.png",
+    "image": "/images/C33.png",
     "traits": {
       "hair_color": "black",
       "hair_length": "short",
@@ -2345,7 +2345,7 @@
   {
     "id": "C34",
     "name": "",
-    "image": "/public/images/C34.png",
+    "image": "/images/C34.png",
     "traits": {
       "hair_color": "brown",
       "hair_length": "medium",
@@ -2416,7 +2416,7 @@
   {
     "id": "C35",
     "name": "",
-    "image": "/public/images/C35.png",
+    "image": "/images/C35.png",
     "traits": {
       "hair_color": "blonde",
       "hair_length": "long",
@@ -2487,7 +2487,7 @@
   {
     "id": "C36",
     "name": "",
-    "image": "/public/images/C36.png",
+    "image": "/images/C36.png",
     "traits": {
       "hair_color": "red",
       "hair_length": "short",
@@ -2558,7 +2558,7 @@
   {
     "id": "C37",
     "name": "",
-    "image": "/public/images/C37.png",
+    "image": "/images/C37.png",
     "traits": {
       "hair_color": "black",
       "hair_length": "medium",
@@ -2629,7 +2629,7 @@
   {
     "id": "C38",
     "name": "",
-    "image": "/public/images/C38.png",
+    "image": "/images/C38.png",
     "traits": {
       "hair_color": "brown",
       "hair_length": "long",
@@ -2700,7 +2700,7 @@
   {
     "id": "C39",
     "name": "",
-    "image": "/public/images/C39.png",
+    "image": "/images/C39.png",
     "traits": {
       "hair_color": "blonde",
       "hair_length": "short",
@@ -2771,7 +2771,7 @@
   {
     "id": "C40",
     "name": "",
-    "image": "/public/images/C40.png",
+    "image": "/images/C40.png",
     "traits": {
       "hair_color": "red",
       "hair_length": "medium",
@@ -2842,7 +2842,7 @@
   {
     "id": "C41",
     "name": "",
-    "image": "/public/images/C41.png",
+    "image": "/images/C41.png",
     "traits": {
       "hair_color": "black",
       "hair_length": "short",
@@ -2913,7 +2913,7 @@
   {
     "id": "C42",
     "name": "",
-    "image": "/public/images/C42.png",
+    "image": "/images/C42.png",
     "traits": {
       "hair_color": "brown",
       "hair_length": "medium",
@@ -2984,7 +2984,7 @@
   {
     "id": "C43",
     "name": "",
-    "image": "/public/images/C43.png",
+    "image": "/images/C43.png",
     "traits": {
       "hair_color": "blonde",
       "hair_length": "long",
@@ -3055,7 +3055,7 @@
   {
     "id": "C44",
     "name": "",
-    "image": "/public/images/C44.png",
+    "image": "/images/C44.png",
     "traits": {
       "hair_color": "red",
       "hair_length": "short",
@@ -3126,7 +3126,7 @@
   {
     "id": "C45",
     "name": "",
-    "image": "/public/images/C45.png",
+    "image": "/images/C45.png",
     "traits": {
       "hair_color": "black",
       "hair_length": "medium",
@@ -3197,7 +3197,7 @@
   {
     "id": "C46",
     "name": "",
-    "image": "/public/images/C46.png",
+    "image": "/images/C46.png",
     "traits": {
       "hair_color": "brown",
       "hair_length": "long",
@@ -3268,7 +3268,7 @@
   {
     "id": "C47",
     "name": "",
-    "image": "/public/images/C47.png",
+    "image": "/images/C47.png",
     "traits": {
       "hair_color": "blonde",
       "hair_length": "short",
@@ -3339,7 +3339,7 @@
   {
     "id": "C48",
     "name": "",
-    "image": "/public/images/C48.png",
+    "image": "/images/C48.png",
     "traits": {
       "hair_color": "red",
       "hair_length": "medium",
@@ -3410,7 +3410,7 @@
   {
     "id": "C49",
     "name": "",
-    "image": "/public/images/C49.png",
+    "image": "/images/C49.png",
     "traits": {
       "hair_color": "black",
       "hair_length": "long",
@@ -3481,7 +3481,7 @@
   {
     "id": "C50",
     "name": "",
-    "image": "/public/images/C50.png",
+    "image": "/images/C50.png",
     "traits": {
       "hair_color": "brown",
       "hair_length": "medium",
@@ -3552,7 +3552,7 @@
   {
     "id": "C51",
     "name": "",
-    "image": "/public/images/C51.png",
+    "image": "/images/C51.png",
     "traits": {
       "hair_color": "blonde",
       "hair_length": "short",
@@ -3623,7 +3623,7 @@
   {
     "id": "C52",
     "name": "",
-    "image": "/public/images/C52.png",
+    "image": "/images/C52.png",
     "traits": {
       "hair_color": "red",
       "hair_length": "long",
@@ -3694,7 +3694,7 @@
   {
     "id": "C53",
     "name": "",
-    "image": "/public/images/C53.png",
+    "image": "/images/C53.png",
     "traits": {
       "hair_color": "black",
       "hair_length": "medium",
@@ -3765,7 +3765,7 @@
   {
     "id": "C54",
     "name": "",
-    "image": "/public/images/C54.png",
+    "image": "/images/C54.png",
     "traits": {
       "hair_color": "brown",
       "hair_length": "short",
@@ -3836,7 +3836,7 @@
   {
     "id": "C55",
     "name": "",
-    "image": "/public/images/C55.png",
+    "image": "/images/C55.png",
     "traits": {
       "hair_color": "blonde",
       "hair_length": "medium",
@@ -3907,7 +3907,7 @@
   {
     "id": "C56",
     "name": "",
-    "image": "/public/images/C56.png",
+    "image": "/images/C56.png",
     "traits": {
       "hair_color": "red",
       "hair_length": "short",
@@ -3978,7 +3978,7 @@
   {
     "id": "C57",
     "name": "",
-    "image": "/public/images/C57.png",
+    "image": "/images/C57.png",
     "traits": {
       "hair_color": "black",
       "hair_length": "short",
@@ -4049,7 +4049,7 @@
   {
     "id": "C58",
     "name": "",
-    "image": "/public/images/C58.png",
+    "image": "/images/C58.png",
     "traits": {
       "hair_color": "red",
       "hair_length": "long",
@@ -4120,7 +4120,7 @@
   {
     "id": "C59",
     "name": "",
-    "image": "/public/images/C59.png",
+    "image": "/images/C59.png",
     "traits": {
       "hair_color": "blonde",
       "hair_length": "short",
@@ -4191,7 +4191,7 @@
   {
     "id": "C60",
     "name": "",
-    "image": "/public/images/C60.png",
+    "image": "/images/C60.png",
     "traits": {
       "hair_color": "brown",
       "hair_length": "medium",
@@ -4262,7 +4262,7 @@
   {
     "id": "C61",
     "name": "",
-    "image": "/public/images/C61.png",
+    "image": "/images/C61.png",
     "traits": {
       "hair_color": "black",
       "hair_length": "long",
@@ -4333,7 +4333,7 @@
   {
     "id": "C62",
     "name": "",
-    "image": "/public/images/C62.png",
+    "image": "/images/C62.png",
     "traits": {
       "hair_color": "blonde",
       "hair_length": "medium",
@@ -4404,7 +4404,7 @@
   {
     "id": "C63",
     "name": "",
-    "image": "/public/images/C63.png",
+    "image": "/images/C63.png",
     "traits": {
       "hair_color": "red",
       "hair_length": "short",
@@ -4475,7 +4475,7 @@
   {
     "id": "C64",
     "name": "",
-    "image": "/public/images/C64.png",
+    "image": "/images/C64.png",
     "traits": {
       "hair_color": "brown",
       "hair_length": "long",

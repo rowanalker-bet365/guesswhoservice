@@ -49,9 +49,18 @@ func (h *SessionHandler) StartSession(w http.ResponseWriter, r *http.Request) {
 	session, err := h.sessionService.StartSession(r.Context(), teamID)
 	if err != nil {
 		if errors.Is(err, service.ErrTooManySessions) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusTooManyRequests)
-			w.Write([]byte(`{"error":"too many active sessions, please wait for your current session to expire"}`))
+			writeErrorJSON(w, http.StatusTooManyRequests, APIError{
+				Error:   "too_many_sessions",
+				Message: "Your team already has the maximum number of active sessions. Complete or reveal an existing session before starting a new one.",
+			})
+			return
+		}
+		if errors.Is(err, service.ErrTeamNotFound) {
+			writeErrorJSON(w, http.StatusForbidden, APIError{
+				Error:   "team_not_found",
+				Message: "The team ID provided does not correspond to a registered team.",
+				Field:   "X-Team-Id",
+			})
 			return
 		}
 		logging.Error(r.Context(), "failed to start session", "error", err)
@@ -154,7 +163,7 @@ func (h *SessionHandler) AskQuestion(w http.ResponseWriter, r *http.Request) {
 		logging.Warn(r.Context(), "invalid request body for ask", "error", err)
 		writeErrorJSON(w, http.StatusBadRequest, APIError{
 			Error:   "invalid_request_body",
-			Message: "The request body could not be parsed as JSON. Expected format: {\"questionId\": \"T01\"}. Ensure Content-Type is application/json.",
+			Message: "The request body could not be parsed as JSON. Expected format: {\"questionId\": \"T04\"} Ensure Content-Type is application/json.",
 		})
 		return
 	}
@@ -238,6 +247,20 @@ func (h *SessionHandler) SubmitGuess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Stage 2: encrypted guess response pending
+	if session.PendingDecryption {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"pending":              true,
+			"encryptedCharacterId": session.PendingEncryptedResponse,
+			"cipher":               session.EncryptCipher,
+			"encoding":             "hex",
+			"hint":                 "Derive the Witness Key from your unencrypted trait answers using HKDF-SHA256 (salt=sessionId, info=\"guesswho-witness-v1\"), then decrypt to reveal the character ID",
+		})
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 
 	if result.Correct {
@@ -293,6 +316,68 @@ func (h *SessionHandler) Status(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// DecryptRequest is the request body for POST /sessions/{sessionId}/decrypt
+type DecryptRequest struct {
+	CandidateID string `json:"candidateId"`
+	WitnessKey  string `json:"witnessKey"`
+}
+
+// SubmitDecryption handles POST /sessions/{sessionId}/decrypt
+func (h *SessionHandler) SubmitDecryption(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("sessionId")
+	teamID := r.Header.Get("X-Team-Id")
+	if teamID == "" {
+		writeErrorJSON(w, http.StatusBadRequest, APIError{
+			Error:   "missing_header",
+			Message: "The X-Team-Id header is required.",
+			Field:   "X-Team-Id",
+		})
+		return
+	}
+
+	var req DecryptRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.CandidateID == "" || req.WitnessKey == "" {
+		writeErrorJSON(w, http.StatusBadRequest, APIError{
+			Error:     "invalid_request",
+			Message:   "A JSON body with \"candidateId\" and \"witnessKey\" is required. Example: {\"candidateId\": \"P01\", \"witnessKey\": \"<hex-encoded-key>\"}.",
+			SessionID: sessionID,
+		})
+		return
+	}
+
+	result, err := h.sessionService.SubmitDecryption(r.Context(), sessionID, teamID, req.CandidateID, req.WitnessKey)
+	if err != nil {
+		statusCode, apiErr := classifyServiceError(err, sessionID)
+		writeErrorJSON(w, statusCode, apiErr)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if result.Correct {
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"correct":   true,
+			"score":     result.Score,
+			"breakdown": result.Breakdown,
+			"stats":     result.Stats,
+			"message":   "Cipher Master! You decrypted the response and identified the character.",
+		})
+	} else {
+		// Fetch session to include current guessesRemaining in the response
+		session, sessionErr := h.sessionService.GetSession(r.Context(), sessionID)
+		guessesRemaining := 0
+		if sessionErr == nil {
+			guessesRemaining = session.GuessesRemaining
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"correct":          false,
+			"guessesRemaining": guessesRemaining,
+			"message":          "Decryption accepted but your original guess was wrong. −200 penalty applied.",
+		})
+	}
 }
 
 // Reveal handles POST /sessions/{sessionId}/reveal

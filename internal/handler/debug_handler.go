@@ -3,6 +3,7 @@ package handler
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/guesswho/internal/db"
@@ -54,14 +55,20 @@ func (h *DebugHandler) GetTeamDebug(w http.ResponseWriter, r *http.Request) {
 	teamID := r.PathValue("teamId")
 	if teamID == "" {
 		logging.Warn(r.Context(), "missing teamId for debug")
-		http.Error(w, "teamId path parameter required", http.StatusBadRequest)
+		writeErrorJSON(w, http.StatusBadRequest, APIError{
+			Error:   "missing_parameter",
+			Message: "teamId path parameter is required.",
+		})
 		return
 	}
 
 	team, err := h.store.ReadTeamData(r.Context(), teamID)
 	if err != nil {
 		logging.Warn(r.Context(), "team not found for debug", "teamId", teamID, "error", err)
-		http.Error(w, "Team not found: "+err.Error(), http.StatusNotFound)
+		writeErrorJSON(w, http.StatusNotFound, APIError{
+			Error:   "team_not_found",
+			Message: "No team found with ID '" + teamID + "'.",
+		})
 		return
 	}
 
@@ -104,12 +111,18 @@ func (h *DebugHandler) FlushAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeErrorJSON(w, http.StatusMethodNotAllowed, APIError{
+			Error:   "method_not_allowed",
+			Message: "Use POST for this endpoint.",
+		})
 		return
 	}
 	if err := h.store.FlushAll(r.Context()); err != nil {
 		logging.Error(r.Context(), "failed to flush Redis", "error", err)
-		http.Error(w, "failed to flush redis: "+err.Error(), http.StatusInternalServerError)
+		writeErrorJSON(w, http.StatusInternalServerError, APIError{
+			Error:   "flush_failed",
+			Message: "Failed to flush Redis. Check server logs.",
+		})
 		return
 	}
 	logging.Warn(r.Context(), "Redis flushed - all data deleted")
@@ -183,5 +196,122 @@ func (h *DebugHandler) DecryptHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{
 		"plaintext":  plaintext,
 		"cipherType": req.CipherType,
+	})
+}
+
+// ListTeamsDebug handles GET /debug/teams.
+// Returns debug data for every registered team, keyed by team name for readability.
+func (h *DebugHandler) ListTeamsDebug(w http.ResponseWriter, r *http.Request) {
+	if !h.authorize(w, r) {
+		return
+	}
+
+	ctx := r.Context()
+	teamIDs, err := h.store.GetAllTeamIDs(ctx)
+	if err != nil {
+		logging.Error(ctx, "failed to list team IDs", "error", err)
+		writeErrorJSON(w, http.StatusInternalServerError, APIError{
+			Error:   "list_failed",
+			Message: "Failed to retrieve team list. Check server logs.",
+		})
+		return
+	}
+
+	teams := make(map[string]map[string]interface{}, len(teamIDs))
+	for _, teamID := range teamIDs {
+		team, err := h.store.ReadTeamData(ctx, teamID)
+		if err != nil {
+			continue
+		}
+
+		data := map[string]interface{}{
+			"color":            team.Color,
+			"registeredAt":     team.RegisteredAt,
+			"score":            team.Score,
+			"solves":           team.Solves,
+			"solvedCharacters": team.SolvedCharacters,
+			"milestones":       team.Milestones,
+		}
+
+		if team.ActiveSessionID != "" {
+			session, err := h.store.ReadSession(ctx, team.ActiveSessionID)
+			if err == nil {
+				var targetFakeID string
+				if session.TargetCandidate != nil && session.CandidateIDMapRev != nil {
+					targetFakeID = session.CandidateIDMapRev[session.TargetCandidate.CandidateID]
+				}
+				data["activeSession"] = map[string]interface{}{
+					"targetCandidate":    targetFakeID,
+					"questionsAsked":     session.QuestionsAsked,
+					"failedRequests":     session.FailedRequests,
+					"timeouts":           session.Timeouts,
+					"unhandled5xx":       session.Unhandled5xx,
+					"guessesRemaining":   session.GuessesRemaining,
+					"completed":          session.Completed,
+					"correctGuess":       session.CorrectGuess,
+					"guessedCandidates":  session.GuessedCandidates,
+					"encryptKey":         session.EncryptKey,
+					"encryptCipher":      session.EncryptCipher,
+					"encryptedQuestions": session.EncryptedQuestions,
+					"blockedQuestions":   session.BlockedQuestions,
+				}
+			}
+		}
+
+		teams[team.Name] = map[string]interface{}{
+			"teamId": teamID,
+			"data":   data,
+		}
+	}
+
+	logging.Info(ctx, "debug teams listed", "count", len(teams))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"count": len(teams),
+		"teams": teams,
+	})
+}
+
+// DeleteTeamDebug handles DELETE /debug/team/{teamId}.
+// Deletes a team and all its associated Redis data.
+func (h *DebugHandler) DeleteTeamDebug(w http.ResponseWriter, r *http.Request) {
+	if !h.authorize(w, r) {
+		return
+	}
+
+	teamID := r.PathValue("teamId")
+	if teamID == "" {
+		logging.Warn(r.Context(), "missing teamId for debug delete")
+		writeErrorJSON(w, http.StatusBadRequest, APIError{
+			Error:   "missing_parameter",
+			Message: "teamId path parameter is required.",
+		})
+		return
+	}
+
+	if err := h.store.DeleteTeam(r.Context(), teamID); err != nil {
+		if errors.Is(err, db.ErrTeamNotFound) {
+			logging.Warn(r.Context(), "team not found for delete", "teamId", teamID)
+			writeErrorJSON(w, http.StatusNotFound, APIError{
+				Error:   "team_not_found",
+				Message: "No team found with ID '" + teamID + "'.",
+			})
+			return
+		}
+		logging.Error(r.Context(), "failed to delete team", "teamId", teamID, "error", err)
+		writeErrorJSON(w, http.StatusInternalServerError, APIError{
+			Error:   "delete_failed",
+			Message: "Failed to delete team. Check server logs.",
+		})
+		return
+	}
+
+	logging.Warn(r.Context(), "team deleted via debug endpoint", "teamId", teamID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "ok",
+		"message": "Team " + teamID + " and all associated data deleted.",
 	})
 }

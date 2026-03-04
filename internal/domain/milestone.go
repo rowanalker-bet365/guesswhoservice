@@ -4,20 +4,22 @@ package domain
 type Milestone string
 
 const (
-	MilestoneM1 Milestone = "M1" // First Round Started
-	MilestoneM2 Milestone = "M2" // First Successful Question
-	MilestoneM3 Milestone = "M3" // Elimination Working
-	MilestoneM4 Milestone = "M4" // First Correct Solve
-	MilestoneM5 Milestone = "M5" // Encrypted Answer Handled
-	MilestoneS1 Milestone = "S1" // Efficiency
-	MilestoneS2 Milestone = "S2" // Automation
-	MilestoneS3 Milestone = "S3" // Resilience
+	MilestoneM1  Milestone = "M1"  // First Round Started
+	MilestoneM2  Milestone = "M2"  // First Successful Question
+	MilestoneM3  Milestone = "M3"  // Elimination Working
+	MilestoneM4  Milestone = "M4"  // First Correct Solve
+	MilestoneM5  Milestone = "M5"  // Encrypted Answer Handled
+	MilestoneSP1 Milestone = "SP1" // Cipher Master
+	MilestoneS1  Milestone = "S1"  // Efficiency
+	MilestoneS2  Milestone = "S2"  // Automation
+	MilestoneS3  Milestone = "S3"  // Resilience
 )
 
 // Milestone score bonuses
 const (
 	CoreMilestoneScore    = 1000 // Points awarded for M1–M5
 	StretchMilestoneScore = 2000 // Points awarded for S1–S3
+	SpecialMilestoneScore = 4000 // Points awarded for SP1
 )
 
 // MilestoneInfo provides human-readable metadata for a milestone.
@@ -35,6 +37,7 @@ var AllMilestones = []MilestoneInfo{
 	{MilestoneM3, "Elimination Working", "Asked 3+ questions in a single session", CoreMilestoneScore},
 	{MilestoneM4, "First Correct Solve", "Correctly identified a character", CoreMilestoneScore},
 	{MilestoneM5, "Encrypted Answer Handled", "Successfully decoded an encrypted answer", CoreMilestoneScore},
+	{MilestoneSP1, "Cipher Master", "Correctly decrypted an encrypted guess response in Stage 2", SpecialMilestoneScore},
 	{MilestoneS1, "Efficiency", "Solved a character with 10 or fewer questions", StretchMilestoneScore},
 	{MilestoneS2, "Automation", "Achieved 3+ total correct solves", StretchMilestoneScore},
 	{MilestoneS3, "Resilience", "Successfully received a valid response during an active chaos window", StretchMilestoneScore},

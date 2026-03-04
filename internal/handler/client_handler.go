@@ -104,7 +104,27 @@ func (h *ClientHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 	var req SignupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		logging.Warn(r.Context(), "invalid signup request body", "error", err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErrorJSON(w, http.StatusBadRequest, APIError{
+			Error:   "invalid_request_body",
+			Message: "Could not parse request. Ensure you are sending valid JSON with Content-Type: application/json.",
+		})
+		return
+	}
+
+	if req.TeamName == "" {
+		writeErrorJSON(w, http.StatusBadRequest, APIError{
+			Error:   "missing_field",
+			Message: "\"teamName\" is required.",
+			Field:   "teamName",
+		})
+		return
+	}
+	if req.Password == "" {
+		writeErrorJSON(w, http.StatusBadRequest, APIError{
+			Error:   "missing_field",
+			Message: "\"password\" is required.",
+			Field:   "password",
+		})
 		return
 	}
 
@@ -112,7 +132,10 @@ func (h *ClientHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 	hashedPassword, err := h.encryptionService.HashPassword(req.Password)
 	if err != nil {
 		logging.Error(r.Context(), "failed to hash password", "error", err)
-		http.Error(w, "Failed to hash password", http.StatusInternalServerError)
+		writeErrorJSON(w, http.StatusInternalServerError, APIError{
+			Error:   "internal_error",
+			Message: "Failed to process signup. Please retry.",
+		})
 		return
 	}
 
@@ -120,12 +143,19 @@ func (h *ClientHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 	registered, err := h.store.RegisterTeamName(r.Context(), req.TeamName, teamID)
 	if err != nil {
 		logging.Error(r.Context(), "failed to register team name", "error", err)
-		http.Error(w, "Failed to register team", http.StatusInternalServerError)
+		writeErrorJSON(w, http.StatusInternalServerError, APIError{
+			Error:   "internal_error",
+			Message: "Failed to register team. Please retry.",
+		})
 		return
 	}
 	if !registered {
 		logging.Warn(r.Context(), "signup attempt with existing team name", "teamName", req.TeamName)
-		http.Error(w, "Team name already exists", http.StatusConflict)
+		writeErrorJSON(w, http.StatusConflict, APIError{
+			Error:   "team_name_taken",
+			Message: "The team name \"" + req.TeamName + "\" is already taken. Choose a different name.",
+			Field:   "teamName",
+		})
 		return
 	}
 
@@ -138,7 +168,10 @@ func (h *ClientHandler) SignupHandler(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.store.WriteTeamData(r.Context(), teamID, newTeam); err != nil {
 		logging.Error(r.Context(), "failed to save team", "teamId", teamID, "error", err)
-		http.Error(w, "Failed to save team", http.StatusInternalServerError)
+		writeErrorJSON(w, http.StatusInternalServerError, APIError{
+			Error:   "internal_error",
+			Message: "Failed to save team. Please retry.",
+		})
 		return
 	}
 
@@ -154,27 +187,47 @@ func (h *ClientHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		logging.Warn(r.Context(), "invalid login request body", "error", err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErrorJSON(w, http.StatusBadRequest, APIError{
+			Error:   "invalid_request_body",
+			Message: "Could not parse request. Ensure you are sending valid JSON with Content-Type: application/json.",
+		})
+		return
+	}
+
+	if req.TeamName == "" || req.Password == "" {
+		writeErrorJSON(w, http.StatusBadRequest, APIError{
+			Error:   "missing_field",
+			Message: "Both \"teamName\" and \"password\" are required.",
+		})
 		return
 	}
 
 	teamID, err := h.store.GetTeamIDByName(r.Context(), req.TeamName)
 	if err != nil {
 		logging.Warn(r.Context(), "login attempt for unknown team", "teamName", req.TeamName)
-		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		writeErrorJSON(w, http.StatusUnauthorized, APIError{
+			Error:   "invalid_credentials",
+			Message: "Invalid team name or password.",
+		})
 		return
 	}
 
 	team, err := h.store.ReadTeamData(r.Context(), teamID)
 	if err != nil {
 		logging.Warn(r.Context(), "login attempt for unknown team", "teamName", req.TeamName)
-		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		writeErrorJSON(w, http.StatusUnauthorized, APIError{
+			Error:   "invalid_credentials",
+			Message: "Invalid team name or password.",
+		})
 		return
 	}
 
 	if !h.encryptionService.CheckPasswordHash(req.Password, team.PasswordHash) {
 		logging.Warn(r.Context(), "login failed - invalid password", "teamName", req.TeamName)
-		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		writeErrorJSON(w, http.StatusUnauthorized, APIError{
+			Error:   "invalid_credentials",
+			Message: "Invalid team name or password.",
+		})
 		return
 	}
 
@@ -191,7 +244,10 @@ func (h *ClientHandler) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	signedToken, err := token.SignedString([]byte(h.jwtSecret))
 	if err != nil {
 		logging.Error(r.Context(), "failed to sign JWT", "teamId", teamID, "error", err)
-		http.Error(w, "Failed to sign token", http.StatusInternalServerError)
+		writeErrorJSON(w, http.StatusInternalServerError, APIError{
+			Error:   "internal_error",
+			Message: "Failed to process login. Please retry.",
+		})
 		return
 	}
 
@@ -219,14 +275,20 @@ func (h *ClientHandler) GetTeamProgressHandler(w http.ResponseWriter, r *http.Re
 	teamID, ok := r.Context().Value(middleware.TeamIDKey).(string)
 	if !ok {
 		logging.Warn(r.Context(), "team ID not found in token")
-		http.Error(w, "Team ID not found in token", http.StatusUnauthorized)
+		writeErrorJSON(w, http.StatusUnauthorized, APIError{
+			Error:   "invalid_token",
+			Message: "Your JWT token is missing or does not contain a valid team ID. Log in again via POST /client/auth/login.",
+		})
 		return
 	}
 
 	team, err := h.store.ReadTeamData(r.Context(), teamID)
 	if err != nil {
 		logging.Warn(r.Context(), "team not found for progress", "teamId", teamID, "error", err)
-		http.Error(w, "Team not found", http.StatusNotFound)
+		writeErrorJSON(w, http.StatusNotFound, APIError{
+			Error:   "team_not_found",
+			Message: "No team found for the ID in your token. The team may have been deleted.",
+		})
 		return
 	}
 
@@ -283,13 +345,19 @@ func (h *ClientHandler) ResetTeamHandler(w http.ResponseWriter, r *http.Request)
 	teamID, ok := r.Context().Value(middleware.TeamIDKey).(string)
 	if !ok {
 		logging.Warn(r.Context(), "team ID not found in token for reset")
-		http.Error(w, "Team ID not found in token", http.StatusUnauthorized)
+		writeErrorJSON(w, http.StatusUnauthorized, APIError{
+			Error:   "invalid_token",
+			Message: "Your JWT token is missing or does not contain a valid team ID. Log in again via POST /client/auth/login.",
+		})
 		return
 	}
 
 	if err := h.store.ResetTeamProgress(r.Context(), teamID); err != nil {
 		logging.Error(r.Context(), "failed to reset team progress", "teamId", teamID, "error", err)
-		http.Error(w, "Failed to reset team progress", http.StatusInternalServerError)
+		writeErrorJSON(w, http.StatusInternalServerError, APIError{
+			Error:   "internal_error",
+			Message: "Failed to reset team progress. Please retry.",
+		})
 		return
 	}
 
@@ -307,7 +375,10 @@ func (h *ClientHandler) GetLeaderboard(w http.ResponseWriter, r *http.Request) {
 	entries, err := h.store.GetLeaderboardEntries(r.Context())
 	if err != nil {
 		logging.Error(r.Context(), "failed to get leaderboard", "error", err)
-		http.Error(w, "Failed to get leaderboard", http.StatusInternalServerError)
+		writeErrorJSON(w, http.StatusInternalServerError, APIError{
+			Error:   "internal_error",
+			Message: "Failed to retrieve leaderboard. Please retry.",
+		})
 		return
 	}
 
@@ -328,7 +399,10 @@ func (h *ClientHandler) GetMasterBoardHandler(w http.ResponseWriter, r *http.Req
 	masterboardData, err := h.store.GetMasterboardFromSets(r.Context())
 	if err != nil {
 		logging.Error(r.Context(), "failed to get masterboard data", "error", err)
-		http.Error(w, "Failed to get masterboard data", http.StatusInternalServerError)
+		writeErrorJSON(w, http.StatusInternalServerError, APIError{
+			Error:   "internal_error",
+			Message: "Failed to retrieve masterboard data. Please retry.",
+		})
 		return
 	}
 
@@ -376,7 +450,7 @@ func (h *ClientHandler) GetMasterBoardHandler(w http.ResponseWriter, r *http.Req
 
 		// Look up the canonical image path from the character catalog.
 		// Fall back to a predictable default if the character is not found.
-		imagePath := fmt.Sprintf("/public/images/%s.png", charID)
+		imagePath := fmt.Sprintf("/images/%s.png", charID)
 		if char, ok := h.characterCatalog.GetCharacterByID(charID); ok {
 			imagePath = char.ImagePath
 		}
