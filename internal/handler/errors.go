@@ -103,6 +103,12 @@ func classifyServiceError(err error, sessionID string, hints ...string) (int, AP
 			Message:   "Decryption failed. Re-examine your key derivation and cipher implementation, then try again.",
 			SessionID: sessionID,
 		}
+	case strings.Contains(msg, "wrong_witness_key"):
+		return http.StatusUnprocessableEntity, APIError{
+			Error:     "wrong_witness_key",
+			Message:   "The witness key is incorrect. Derive it from your unencrypted trait answers using HKDF-SHA256 (salt=sessionId, info=\"guesswho-witness-v1\").",
+			SessionID: sessionID,
+		}
 	case strings.Contains(msg, "session_locked"):
 		return http.StatusServiceUnavailable, APIError{
 			Error:     "session_locked",

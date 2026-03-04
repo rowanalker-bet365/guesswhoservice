@@ -321,6 +321,7 @@ func (h *SessionHandler) Status(w http.ResponseWriter, r *http.Request) {
 // DecryptRequest is the request body for POST /sessions/{sessionId}/decrypt
 type DecryptRequest struct {
 	CandidateID string `json:"candidateId"`
+	WitnessKey  string `json:"witnessKey"`
 }
 
 // SubmitDecryption handles POST /sessions/{sessionId}/decrypt
@@ -337,16 +338,16 @@ func (h *SessionHandler) SubmitDecryption(w http.ResponseWriter, r *http.Request
 	}
 
 	var req DecryptRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.CandidateID == "" {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.CandidateID == "" || req.WitnessKey == "" {
 		writeErrorJSON(w, http.StatusBadRequest, APIError{
 			Error:     "invalid_request",
-			Message:   "A JSON body with \"candidateId\" is required. Example: {\"candidateId\": \"P01\"}.",
+			Message:   "A JSON body with \"candidateId\" and \"witnessKey\" is required. Example: {\"candidateId\": \"P01\", \"witnessKey\": \"<hex-encoded-key>\"}.",
 			SessionID: sessionID,
 		})
 		return
 	}
 
-	result, err := h.sessionService.SubmitDecryption(r.Context(), sessionID, teamID, req.CandidateID)
+	result, err := h.sessionService.SubmitDecryption(r.Context(), sessionID, teamID, req.CandidateID, req.WitnessKey)
 	if err != nil {
 		statusCode, apiErr := classifyServiceError(err, sessionID)
 		writeErrorJSON(w, statusCode, apiErr)

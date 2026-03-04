@@ -32,7 +32,7 @@ type SessionService interface {
 	AskQuestion(ctx context.Context, sessionID string, questionID string, value string) (*domain.TraitAnswer, error)
 	SubmitGuess(ctx context.Context, sessionID string, candidateID string) (*domain.GuessResult, error)
 	Reveal(ctx context.Context, sessionID string) (*domain.RevealResult, error)
-	SubmitDecryption(ctx context.Context, sessionID, teamID, submittedCandidateID string) (*domain.GuessResult, error)
+	SubmitDecryption(ctx context.Context, sessionID, teamID, submittedCandidateID, witnessKey string) (*domain.GuessResult, error)
 }
 
 type sessionService struct {
@@ -312,9 +312,9 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 		boolAnswer = strings.EqualFold(actualValue, value)
 	}
 
-	// Skip blocking for first-solve sessions (teamSolvesAtStart == 0) to keep the
+	// Skip blocking until the team has at least 10 solves to keep the
 	// initial experience simple and straightforward.
-	if session.Stage != 2 && session.TeamSolvesAtStart > 0 {
+	if session.Stage != 2 && session.TeamSolvesAtStart >= 10 {
 		if session.BlockedQuestions == nil {
 			session.BlockedQuestions = make(map[string]bool)
 		}
@@ -353,8 +353,8 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 		// Question was already asked and recorded — reuse the stored encryption decision.
 		shouldEncrypt = decided
 	} else {
-		// Skip encryption for first-solve sessions to keep the initial experience straightforward.
-		if session.TeamSolvesAtStart > 0 {
+		// Skip encryption until the team has at least 10 solves to keep the initial experience straightforward.
+		if session.TeamSolvesAtStart >= 10 {
 			// C2/W1: use unbiased threshold (102/256 ≈ 39.8%) and handle crand.Read error.
 			encRollBytes := make([]byte, 1)
 			if _, err := crand.Read(encRollBytes); err != nil {
@@ -708,7 +708,7 @@ func (s *sessionService) updateTeamStats(ctx context.Context, session *domain.Se
 	}
 }
 
-func (s *sessionService) SubmitDecryption(ctx context.Context, sessionID, teamID, submittedCandidateID string) (*domain.GuessResult, error) {
+func (s *sessionService) SubmitDecryption(ctx context.Context, sessionID, teamID, submittedCandidateID, witnessKey string) (*domain.GuessResult, error) {
 	// Acquire session lock
 	lockValue, err := s.dbStore.AcquireSessionLock(ctx, sessionID)
 	if err != nil {
@@ -737,9 +737,18 @@ func (s *sessionService) SubmitDecryption(ctx context.Context, sessionID, teamID
 		return nil, fmt.Errorf("no_pending_decryption")
 	}
 
-	// Validate the submitted decryption
+	// Validate the submitted decryption: candidate ID must match AND
+	// the witness key must be correct (proves the player actually derived it).
 	if submittedCandidateID != session.PendingDecryptionPlaintext {
 		return nil, fmt.Errorf("wrong_decryption")
+	}
+
+	expectedWitnessKey, wErr := s.encryptionService.DeriveWitnessKey(session.SessionID, session.UnencryptedTraitAnswers)
+	if wErr != nil {
+		return nil, fmt.Errorf("failed to derive witness key for validation: %w", wErr)
+	}
+	if witnessKey != expectedWitnessKey {
+		return nil, fmt.Errorf("wrong_witness_key")
 	}
 
 	// Correct decryption — capture pending state then clear it
