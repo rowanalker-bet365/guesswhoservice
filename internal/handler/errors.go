@@ -30,18 +30,17 @@ func classifyServiceError(err error, sessionID string, hints ...string) (int, AP
 	case strings.Contains(msg, "session already completed"):
 		return http.StatusConflict, APIError{
 			Error:     "session_completed",
-			Message:   "Session '" + sessionID + "' has already ended. No further actions can be performed. Start a new session with POST /sessions/start.",
+			Message:   "This session has concluded. Start a new session with POST /sessions/start.",
 			SessionID: sessionID,
 		}
 	case strings.Contains(msg, "enum trait requires a value"):
-		// L1: the hint passed here is req.QuestionID (not the trait key), so label it correctly.
 		questionID := ""
 		if len(hints) > 0 {
 			questionID = hints[0]
 		}
 		return http.StatusBadRequest, APIError{
 			Error:   "value_required",
-			Message: "This trait is an enum type. You must specify the value you are asking about (e.g. {\"questionId\": \"T01\", \"value\": \"brown\"}). Question ID: '" + questionID + "'.",
+			Message: "This is an enum trait with multiple possible values. You must include a \"value\" field — e.g. {\"questionId\": \"" + questionID + "\", \"value\": \"brown\"}. Boolean traits do not require a value — e.g. {\"questionId\": \"T04\"}. Consult GET /sessions/{sessionId}/questions for trait types.",
 		}
 	case strings.Contains(msg, "invalid question ID"):
 		questionID := ""
@@ -50,12 +49,12 @@ func classifyServiceError(err error, sessionID string, hints ...string) (int, AP
 		}
 		return http.StatusBadRequest, APIError{
 			Error:   "invalid_question_id",
-			Message: "Question ID '" + questionID + "' does not exist. Use GET /sessions/" + sessionID + "/questions to see available question IDs (T01-T64).",
+			Message: "'" + questionID + "' is not a recognised question. Consult GET /sessions/" + sessionID + "/questions for the available set.",
 		}
 	case strings.Contains(msg, "no guesses remaining"):
 		return http.StatusConflict, APIError{
 			Error:     "no_guesses_remaining",
-			Message:   "You have exhausted all guesses for session '" + sessionID + "'. The session is now over. Use POST /sessions/" + sessionID + "/reveal to see the target, then start a new session.",
+			Message:   "All guesses have been spent. The session is over. You may POST /sessions/" + sessionID + "/reveal to learn the target's identity, then start fresh.",
 			SessionID: sessionID,
 		}
 	case strings.Contains(msg, "invalid candidate ID"):
@@ -65,54 +64,67 @@ func classifyServiceError(err error, sessionID string, hints ...string) (int, AP
 		}
 		return http.StatusBadRequest, APIError{
 			Error:   "invalid_candidate_id",
-			Message: "Candidate ID '" + candidateID + "' is not valid. Use GET /sessions/" + sessionID + "/board to see valid candidate IDs.",
+			Message: "'" + candidateID + "' does not match any candidate on the board. Consult GET /sessions/" + sessionID + "/board for valid IDs.",
+		}
+	case strings.Contains(msg, "must ask at least 5 questions"):
+		return http.StatusConflict, APIError{
+			Error:     "insufficient_questions",
+			Message:   "You must ask more questions before you can reveal the target.",
+			SessionID: sessionID,
+		}
+	case strings.Contains(msg, "failed to encrypt answer"),
+		strings.Contains(msg, "failed to persist session"):
+		return http.StatusInternalServerError, APIError{
+			Error:     "transient_error",
+			Message:   "A transient server error occurred. Please retry your last request.",
+			SessionID: sessionID,
 		}
 	case strings.Contains(msg, "trait not found on target"):
 		return http.StatusInternalServerError, APIError{
 			Error:     "internal_error",
-			Message:   "An internal error occurred while processing your question. Please retry or contact the event organiser.",
+			Message:   "An internal error occurred. Please retry or contact the event organiser.",
 			SessionID: sessionID,
 		}
 	case strings.Contains(msg, "not_stage_2"):
 		return http.StatusBadRequest, APIError{
 			Error:     "not_stage_2",
-			Message:   "this endpoint requires a Stage 2 session",
+			Message:   "The /decrypt endpoint is not available for this session. It unlocks at a later stage of the game.",
 			SessionID: sessionID,
 		}
 	case strings.Contains(msg, "no_pending_decryption"):
 		return http.StatusConflict, APIError{
 			Error:     "no_pending_decryption",
-			Message:   "no encrypted guess response is pending for this session",
+			Message:   "There is no cipher to break. This operation is only available when an encrypted response is pending.",
 			SessionID: sessionID,
 		}
 	case strings.Contains(msg, "wrong_decryption"):
 		return http.StatusUnprocessableEntity, APIError{
 			Error:     "wrong_decryption",
-			Message:   "decryption incorrect — check your cipher and key, then try again",
+			Message:   "Decryption failed. Re-examine your key derivation and cipher implementation, then try again.",
 			SessionID: sessionID,
 		}
 	case strings.Contains(msg, "session_locked"):
 		return http.StatusServiceUnavailable, APIError{
 			Error:     "session_locked",
-			Message:   "session is currently being modified, please retry shortly",
+			Message:   "This session is currently being modified by another request. Retry shortly.",
 			SessionID: sessionID,
 		}
 	case strings.Contains(msg, "pending_decryption"):
 		return http.StatusConflict, APIError{
 			Error:     "pending_decryption",
-			Message:   "a decryption challenge is pending — submit your answer to POST /sessions/{id}/decrypt first",
+			Message:   "An encrypted challenge is awaiting your response. Resolve it via POST /sessions/" + sessionID + "/decrypt before making another guess.",
 			SessionID: sessionID,
 		}
 	case strings.Contains(msg, "team not found"):
 		return http.StatusForbidden, APIError{
 			Error:   "team_not_found",
-			Message: "The team ID does not correspond to a registered team.",
+			Message: "The provided team ID does not correspond to a registered team. Verify your X-Team-Id header.",
 		}
 	default:
 		// Likely a redis.Nil / session-not-found error
 		return http.StatusNotFound, APIError{
 			Error:     "session_not_found",
-			Message:   "No session exists with ID '" + sessionID + "'. The session may have expired or the ID is incorrect. Start a new session with POST /sessions/start.",
+			Message:   "No session exists with this ID. It may have expired or the ID is incorrect. Start a new session with POST /sessions/start.",
 			SessionID: sessionID,
 		}
 	}

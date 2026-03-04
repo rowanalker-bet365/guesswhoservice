@@ -49,9 +49,10 @@ func (h *SessionHandler) StartSession(w http.ResponseWriter, r *http.Request) {
 	session, err := h.sessionService.StartSession(r.Context(), teamID)
 	if err != nil {
 		if errors.Is(err, service.ErrTooManySessions) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusTooManyRequests)
-			w.Write([]byte(`{"error":"too many active sessions, please wait for your current session to expire"}`))
+			writeErrorJSON(w, http.StatusTooManyRequests, APIError{
+				Error:   "too_many_sessions",
+				Message: "Your team already has the maximum number of active sessions. Complete or reveal an existing session before starting a new one.",
+			})
 			return
 		}
 		if errors.Is(err, service.ErrTeamNotFound) {
@@ -162,7 +163,7 @@ func (h *SessionHandler) AskQuestion(w http.ResponseWriter, r *http.Request) {
 		logging.Warn(r.Context(), "invalid request body for ask", "error", err)
 		writeErrorJSON(w, http.StatusBadRequest, APIError{
 			Error:   "invalid_request_body",
-			Message: "The request body could not be parsed as JSON. Expected format: {\"questionId\": \"T01\"}. Ensure Content-Type is application/json.",
+			Message: "The request body could not be parsed as JSON. Expected format: {\"questionId\": \"T04\"} Ensure Content-Type is application/json.",
 		})
 		return
 	}
@@ -328,8 +329,9 @@ func (h *SessionHandler) SubmitDecryption(w http.ResponseWriter, r *http.Request
 	teamID := r.Header.Get("X-Team-Id")
 	if teamID == "" {
 		writeErrorJSON(w, http.StatusBadRequest, APIError{
-			Error:   "missing_team_id",
-			Message: "X-Team-Id header is required",
+			Error:   "missing_header",
+			Message: "The X-Team-Id header is required.",
+			Field:   "X-Team-Id",
 		})
 		return
 	}
@@ -338,7 +340,7 @@ func (h *SessionHandler) SubmitDecryption(w http.ResponseWriter, r *http.Request
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.CandidateID == "" {
 		writeErrorJSON(w, http.StatusBadRequest, APIError{
 			Error:     "invalid_request",
-			Message:   "candidateId is required",
+			Message:   "A JSON body with \"candidateId\" is required. Example: {\"candidateId\": \"P01\"}.",
 			SessionID: sessionID,
 		})
 		return

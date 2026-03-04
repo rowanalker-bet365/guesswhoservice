@@ -56,7 +56,8 @@ type Session struct {
 	PendingDecryptionPlaintext string             `json:"pendingDecryptionPlaintext"`
 	PendingScore              int                 `json:"pendingScore"`
 	PendingEncryptedResponse  string              `json:"pendingEncryptedResponse"`
-	UnencryptedTraitAnswers   map[string]string   `json:"unencryptedTraitAnswers"`
+	UnencryptedTraitAnswers map[string]string   `json:"unencryptedTraitAnswers"`
+	TeamSolvesAtStart       int                 `json:"teamSolvesAtStart"`
 }
 
 // NewSession creates a new game session

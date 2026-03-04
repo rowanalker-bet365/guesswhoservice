@@ -137,6 +137,7 @@ func (s *sessionService) StartSession(ctx context.Context, teamID string) (*doma
 	}
 
 	session := domain.NewSession(sessionID, teamID, 3, perSessionSeed, chaosProfile, stage)
+	session.TeamSolvesAtStart = teamData.Solves
 
 	// Generate board: load all characters from the catalog and shuffle them
 	// using the per-session seed so every session has a unique board order.
@@ -311,7 +312,9 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 		boolAnswer = strings.EqualFold(actualValue, value)
 	}
 
-	if session.Stage != 2 {
+	// Skip blocking for first-solve sessions (teamSolvesAtStart == 0) to keep the
+	// initial experience simple and straightforward.
+	if session.Stage != 2 && session.TeamSolvesAtStart > 0 {
 		if session.BlockedQuestions == nil {
 			session.BlockedQuestions = make(map[string]bool)
 		}
@@ -350,13 +353,16 @@ func (s *sessionService) AskQuestion(ctx context.Context, sessionID string, ques
 		// Question was already asked and recorded — reuse the stored encryption decision.
 		shouldEncrypt = decided
 	} else {
-		// C2/W1: use unbiased threshold (102/256 ≈ 39.8%) and handle crand.Read error.
-		encRollBytes := make([]byte, 1)
-		if _, err := crand.Read(encRollBytes); err != nil {
-			// If crypto/rand is unavailable, log a warning and fall through (safe default: no encryption).
-			logging.Warn(ctx, "crypto/rand unavailable for encrypt roll, skipping encryption", "error", err)
-		} else {
-			shouldEncrypt = int(encRollBytes[0]) < 102 // 102/256 ≈ 39.8%
+		// Skip encryption for first-solve sessions to keep the initial experience straightforward.
+		if session.TeamSolvesAtStart > 0 {
+			// C2/W1: use unbiased threshold (102/256 ≈ 39.8%) and handle crand.Read error.
+			encRollBytes := make([]byte, 1)
+			if _, err := crand.Read(encRollBytes); err != nil {
+				// If crypto/rand is unavailable, log a warning and fall through (safe default: no encryption).
+				logging.Warn(ctx, "crypto/rand unavailable for encrypt roll, skipping encryption", "error", err)
+			} else {
+				shouldEncrypt = int(encRollBytes[0]) < 102 // 102/256 ≈ 39.8%
+			}
 		}
 		if session.EncryptedQuestions == nil {
 			session.EncryptedQuestions = make(map[string]bool)
