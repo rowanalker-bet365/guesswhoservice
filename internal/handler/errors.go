@@ -118,7 +118,7 @@ func classifyServiceError(err error, sessionID string, hints ...string) (int, AP
 	case strings.Contains(msg, "pending_decryption"):
 		return http.StatusConflict, APIError{
 			Error:     "pending_decryption",
-			Message:   "An encrypted challenge is awaiting your response. Resolve it via POST /sessions/" + sessionID + "/decrypt before making another guess.",
+			Message:   "An encrypted challenge is awaiting your response. Resolve it via POST /sessions/" + sessionID + "/decrypt before making another guess. Derive the Witness Key from your unencrypted trait answers using HKDF-SHA256 (salt=sessionId, info=\"guesswho-witness-v1\"), then decrypt the encryptedCharacterId to reveal the candidate ID. Submit both candidateId and witnessKey to the decrypt endpoint.",
 			SessionID: sessionID,
 		}
 	case strings.Contains(msg, "team not found"):
