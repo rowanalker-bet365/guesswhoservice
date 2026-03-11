@@ -67,6 +67,11 @@ type DecodeResponse struct {
 	Key      string `json:"key,omitempty"`
 	Encoding string `json:"encoding"`
 	Hint     string `json:"hint"`
+	// Stage 2 witness key fields
+	WitnessKeyAlgorithm string `json:"witnessKeyAlgorithm,omitempty"`
+	WitnessKeySalt      string `json:"witnessKeySalt,omitempty"`
+	WitnessKeyInfo      string `json:"witnessKeyInfo,omitempty"`
+	WitnessKeyHint      string `json:"witnessKeyHint,omitempty"`
 }
 
 // Decode handles POST /sessions/{sessionId}/decode
@@ -152,6 +157,13 @@ func (h *TraitHandler) Decode(w http.ResponseWriter, r *http.Request) {
 		Key:      hint.Key,
 		Encoding: hint.Encoding,
 		Hint:     hint.Hint,
+	}
+
+	if session.Stage == 2 {
+		response.WitnessKeyAlgorithm = "HKDF-SHA256"
+		response.WitnessKeySalt      = session.SessionID
+		response.WitnessKeyInfo      = "guesswho-witness-v1"
+		response.WitnessKeyHint      = "Sort your unencrypted trait answers as \"traitKey=answer\" pairs, join with \\n, use as HKDF IKM with the salt and info above to derive a 32-byte (64-char hex) Witness Key. Use this key (with the same cipher) to decrypt the encryptedCharacterId from the guess response."
 	}
 
 	w.Header().Set("Content-Type", "application/json")
